@@ -1,0 +1,24 @@
+{
+  "universe_usage_history": [
+    {
+      "universe": "Firefly",
+      "assignment_id": "firefly-20260716-093819",
+      "used_at": "2026-07-16T09:38:19-05:00"
+    }
+  ],
+  "assignment_cast_snapshots": {
+    "firefly-20260716-093819": {
+      "universe": "Firefly",
+      "agents": {
+        "lead-integration-architect": "Mal",
+        "infra-devops-engineer": "Kaylee",
+        "logic-apps-edi-developer": "Wash",
+        "security-engineer": "Zoe",
+        "tester-qa": "Jayne",
+        "technical-writer": "Book",
+        "edi-analyst": "Simon"
+      },
+      "created_at": "2026-07-16T09:38:19-05:00"
+    }
+  }
+}

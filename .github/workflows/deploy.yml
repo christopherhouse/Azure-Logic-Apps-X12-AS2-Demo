@@ -1,0 +1,11 @@
+# TODO (work item #20)
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "TODO: subscription-scoped deploy via OIDC — implemented in a later work item"

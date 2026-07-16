@@ -1,0 +1,11 @@
+# TODO (work item #21)
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "TODO: tear down all three RGs — implemented in a later work item"

@@ -1,0 +1,11 @@
+# TODO (work item #19)
+name: Validate Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "TODO: lint + what-if — implemented in a later work item"
