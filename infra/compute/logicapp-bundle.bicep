@@ -49,6 +49,15 @@ param keyVaultUri string
 @description('WEBSITE_NODE_DEFAULT_VERSION value for the Logic App runtime')
 param nodeDefaultVersion string = '~22'
 
+@description('Service Bus fully-qualified namespace (for built-in connector)')
+param serviceBusFullyQualifiedNamespace string
+
+@description('SQL Server FQDN (for built-in connector)')
+param sqlServerFqdn string
+
+@description('SQL Database name (for built-in connector)')
+param sqlDatabaseName string
+
 // The Key Vault secret that CI publishes out-of-band with the Azure Files connection string.
 // The compute module only references it; it does NOT author the secret (see decision doc).
 var contentShareSecretName = 'contentshare-${storageName}'
@@ -166,6 +175,32 @@ resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'WEBSITE_CONTENTSHARE'
           value: contentShareName
+        }
+        // --- Service Bus built-in connector (connection-prefix model) ---
+        {
+          name: 'serviceBus__fullyQualifiedNamespace'
+          value: serviceBusFullyQualifiedNamespace
+        }
+        {
+          name: 'serviceBus__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'serviceBus__clientId'
+          value: uamiClientId
+        }
+        // --- SQL built-in connector (managed identity) ---
+        {
+          name: 'sql__serverFqdn'
+          value: sqlServerFqdn
+        }
+        {
+          name: 'sql__databaseName'
+          value: sqlDatabaseName
+        }
+        {
+          name: 'sql__clientId'
+          value: uamiClientId
         }
       ]
     }

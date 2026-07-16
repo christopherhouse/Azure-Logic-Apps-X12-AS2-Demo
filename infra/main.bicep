@@ -207,11 +207,10 @@ module purchaserCompute 'compute/logicapp-bundle.bicep' = {
     uamiClientId: purchaserUami.outputs.clientId
     appInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultUri: keyVault.outputs.uri
+    serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
+    sqlServerFqdn: sqlServer.outputs.serverFqdn
+    sqlDatabaseName: sqlServer.outputs.databaseName
   }
-  dependsOn: [
-    sqlServer
-    serviceBus
-  ]
 }
 
 // ============================================================================
@@ -232,11 +231,10 @@ module supplierCompute 'compute/logicapp-bundle.bicep' = {
     uamiClientId: supplierUami.outputs.clientId
     appInsightsConnectionString: applicationInsights.outputs.connectionString
     keyVaultUri: keyVault.outputs.uri
+    serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
+    sqlServerFqdn: sqlServer.outputs.serverFqdn
+    sqlDatabaseName: sqlServer.outputs.databaseName
   }
-  dependsOn: [
-    sqlServer
-    serviceBus
-  ]
 }
 
 // ============================================================================
