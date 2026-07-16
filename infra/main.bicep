@@ -80,37 +80,34 @@ resource rgPurchaserResource 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 }
 
 // ============================================================================
-// TODO: SHARED TIER — LOG ANALYTICS WORKSPACE (#6)
+// SHARED TIER — LOG ANALYTICS WORKSPACE (#5)
 // ============================================================================
-// module logAnalyticsWorkspace 'shared/law.bicep' = {
-//   name: 'deploy-law'
-//   scope: resourceGroup(rgShared)
-//   params: {
-//     name: names.outputs.logAnalyticsWorkspace
-//     location: sharedLocation
-//     tags: commonTags
-//   }
-//   dependsOn: [
-//     rgSharedResource
-//   ]
-// }
+module logAnalyticsWorkspace 'shared/law.bicep' = {
+  name: 'deploy-law'
+  scope: resourceGroup(rgShared)
+  params: {
+    name: names.outputs.logAnalyticsWorkspace
+    location: sharedLocation
+    tags: commonTags
+  }
+  dependsOn: [
+    rgSharedResource
+  ]
+}
 
 // ============================================================================
-// TODO: SHARED TIER — APPLICATION INSIGHTS (#7)
+// SHARED TIER — APPLICATION INSIGHTS (#6)
 // ============================================================================
-// module applicationInsights 'shared/appinsights.bicep' = {
-//   name: 'deploy-appinsights'
-//   scope: resourceGroup(rgShared)
-//   params: {
-//     name: names.outputs.applicationInsights
-//     location: sharedLocation
-//     workspaceResourceId: logAnalyticsWorkspace.outputs.id
-//     tags: commonTags
-//   }
-//   dependsOn: [
-//     logAnalyticsWorkspace
-//   ]
-// }
+module applicationInsights 'shared/appinsights.bicep' = {
+  name: 'deploy-appinsights'
+  scope: resourceGroup(rgShared)
+  params: {
+    name: names.outputs.applicationInsights
+    location: sharedLocation
+    workspaceResourceId: logAnalyticsWorkspace.outputs.id
+    tags: commonTags
+  }
+}
 
 // ============================================================================
 // TODO: KEY VAULT (#8)
@@ -130,42 +127,37 @@ resource rgPurchaserResource 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 // }
 
 // ============================================================================
-// TODO: SQL SERVER + DATABASE (#9)
+// SQL SERVER + DATABASE (#9)
 // ============================================================================
-// module sqlServer 'shared/sql.bicep' = {
-//   name: 'deploy-sql'
-//   scope: resourceGroup(rgShared)
-//   params: {
-//     serverName: names.outputs.sqlServer
-//     databaseName: names.outputs.sqlDatabase
-//     location: sharedLocation
-//     tags: commonTags
-//     entraAdminGroupObjectId: 'b9dac399-abc0-479d-9900-f2115a98297d'
-//     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
-//   }
-//   dependsOn: [
-//     logAnalyticsWorkspace
-//   ]
-// }
+module sqlServer 'shared/sql.bicep' = {
+  name: 'deploy-sql'
+  scope: resourceGroup(rgShared)
+  params: {
+    serverName: names.outputs.sqlServer
+    databaseName: names.outputs.sqlDatabase
+    location: sharedLocation
+    tags: commonTags
+    entraAdminGroupObjectId: 'b9dac399-abc0-479d-9900-f2115a98297d'
+    entraAdminGroupLogin: 'sql-admins'
+    logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+  }
+}
 
 // ============================================================================
-// TODO: SERVICE BUS NAMESPACE (#10)
+// SERVICE BUS NAMESPACE (#10)
 // ============================================================================
-// module serviceBus 'shared/servicebus.bicep' = {
-//   name: 'deploy-servicebus'
-//   scope: resourceGroup(rgShared)
-//   params: {
-//     namespaceName: names.outputs.serviceBusNamespace
-//     location: sharedLocation
-//     tags: commonTags
-//     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
-//     topicName: 'purchase-orders.received'
-//     subscriptionName: 'all-messages'
-//   }
-//   dependsOn: [
-//     logAnalyticsWorkspace
-//   ]
-// }
+module serviceBus 'shared/servicebus.bicep' = {
+  name: 'deploy-servicebus'
+  scope: resourceGroup(rgShared)
+  params: {
+    namespaceName: names.outputs.serviceBusNamespace
+    location: sharedLocation
+    tags: commonTags
+    logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+    topicName: 'purchase-orders.received'
+    subscriptionName: 'all-messages'
+  }
+}
 
 // ============================================================================
 // TODO: USER-ASSIGNED MANAGED IDENTITIES (#11, #12)
@@ -276,3 +268,14 @@ output resourceGroupSupplier string = rgSupplier
 output resourceGroupPurchaser string = rgPurchaser
 
 output namingOutputs object = names
+
+// Shared tier outputs
+output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.outputs.id
+output applicationInsightsConnectionString string = applicationInsights.outputs.connectionString
+output applicationInsightsInstrumentationKey string = applicationInsights.outputs.instrumentationKey
+output sqlServerFqdn string = sqlServer.outputs.serverFqdn
+output sqlDatabaseName string = sqlServer.outputs.databaseName
+output serviceBusNamespaceId string = serviceBus.outputs.namespaceId
+output serviceBusFullyQualifiedNamespace string = serviceBus.outputs.fullyQualifiedNamespace
+output serviceBusTopicName string = serviceBus.outputs.topicName
+output serviceBusSubscriptionName string = serviceBus.outputs.subscriptionName
