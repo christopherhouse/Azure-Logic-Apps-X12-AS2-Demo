@@ -1,11 +1,192 @@
-# TODO (work item #20)
+# Infrastructure Deployment Workflow
+# 
+# Triggers: workflow_dispatch, push to main (optional)
+# Purpose: Deploy subscription-scoped Bicep template with post-deploy steps
+#
+# Prerequisites:
+# - GitHub secrets configured:
+#   - AZURE_CLIENT_ID: Service Principal / App Registration client ID
+#   - AZURE_TENANT_ID: 76de2d2d-77f8-438d-9a87-01806f2345da
+#   - AZURE_SUBSCRIPTION_ID: 8bd05b2f-62c5-4def-9869-f0617ebb3970
+# - Federated credential configured for this repo (OIDC)
+# - Service principal MUST be a member of Entra SQL admin group b9dac399-abc0-479d-9900-f2115a98297d
+#   (required for SQL contained user creation step)
+# - Service principal MUST have Contributor + User Access Administrator at subscription scope
+#   (required for RG creation and RBAC assignments)
+#
+# Post-deploy steps:
+# 1. Content-share key rotation: publish storage connection strings to Key Vault
+# 2. SQL user/role creation: run T-SQL to create contained users and custom roles
+#
+# NOTE: This workflow implements the sanctioned content-share exception (WS1 Logic Apps require
+# storage account key for Azure Files content share). Keys are published to Key Vault and
+# referenced via WEBSITE_CONTENTAZUREFILECONNECTIONSTRING app setting.
+
 name: Deploy Infrastructure
 
 on:
   workflow_dispatch:
+  # Uncomment below to enable automatic deploy on push to main
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'infra/**'
+  #     - '.github/workflows/deploy.yml'
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
+    name: Deploy to Azure
     runs-on: ubuntu-latest
+    
     steps:
-      - run: echo "TODO: subscription-scoped deploy via OIDC — implemented in a later work item"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep template
+        id: deploy
+        run: |
+          echo "Starting subscription-scoped deployment..."
+          
+          DEPLOYMENT_OUTPUT=$(az deployment sub create \
+            --location centralus \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --query 'properties.outputs' \
+            --output json)
+          
+          echo "Deployment complete. Parsing outputs..."
+          
+          # Extract outputs for post-deploy steps
+          KEY_VAULT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.keyVaultName.value')
+          PURCHASER_STORAGE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserStorageName.value')
+          SUPPLIER_STORAGE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierStorageName.value')
+          PURCHASER_LOGIC_APP_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserLogicAppName.value')
+          SUPPLIER_LOGIC_APP_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierLogicAppName.value')
+          PURCHASER_CONTENT_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserContentShareSecretName.value')
+          SUPPLIER_CONTENT_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierContentShareSecretName.value')
+          SQL_SERVER_FQDN=$(echo $DEPLOYMENT_OUTPUT | jq -r '.sqlServerFqdn.value')
+          SQL_DATABASE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.sqlDatabaseName.value')
+          PURCHASER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.namingOutputs.value.purchaserUami')
+          SUPPLIER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.namingOutputs.value.supplierUami')
+          RG_PURCHASER=$(echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupPurchaser.value')
+          RG_SUPPLIER=$(echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupSupplier.value')
+          
+          # Export to GITHUB_OUTPUT for subsequent steps
+          echo "keyVaultName=$KEY_VAULT_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserStorageName=$PURCHASER_STORAGE_NAME" >> $GITHUB_OUTPUT
+          echo "supplierStorageName=$SUPPLIER_STORAGE_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserLogicAppName=$PURCHASER_LOGIC_APP_NAME" >> $GITHUB_OUTPUT
+          echo "supplierLogicAppName=$SUPPLIER_LOGIC_APP_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserContentSecret=$PURCHASER_CONTENT_SECRET" >> $GITHUB_OUTPUT
+          echo "supplierContentSecret=$SUPPLIER_CONTENT_SECRET" >> $GITHUB_OUTPUT
+          echo "sqlServerFqdn=$SQL_SERVER_FQDN" >> $GITHUB_OUTPUT
+          echo "sqlDatabaseName=$SQL_DATABASE_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserUamiName=$PURCHASER_UAMI_NAME" >> $GITHUB_OUTPUT
+          echo "supplierUamiName=$SUPPLIER_UAMI_NAME" >> $GITHUB_OUTPUT
+          echo "rgPurchaser=$RG_PURCHASER" >> $GITHUB_OUTPUT
+          echo "rgSupplier=$RG_SUPPLIER" >> $GITHUB_OUTPUT
+          
+          echo "✅ Deployment outputs captured"
+        shell: bash
+
+      - name: Post-Deploy - Publish content-share connection strings to Key Vault
+        run: |
+          echo "Publishing content-share connection strings..."
+          
+          # Purchaser storage
+          PURCHASER_KEY=$(az storage account keys list \
+            --account-name ${{ steps.deploy.outputs.purchaserStorageName }} \
+            --resource-group ${{ steps.deploy.outputs.rgPurchaser }} \
+            --query '[0].value' \
+            --output tsv)
+          
+          PURCHASER_CONN_STRING="DefaultEndpointsProtocol=https;AccountName=${{ steps.deploy.outputs.purchaserStorageName }};AccountKey=$PURCHASER_KEY;EndpointSuffix=core.windows.net"
+          
+          az keyvault secret set \
+            --vault-name ${{ steps.deploy.outputs.keyVaultName }} \
+            --name ${{ steps.deploy.outputs.purchaserContentSecret }} \
+            --value "$PURCHASER_CONN_STRING" \
+            --output none
+          
+          echo "✅ Purchaser content-share connection string published to Key Vault"
+          
+          # Supplier storage
+          SUPPLIER_KEY=$(az storage account keys list \
+            --account-name ${{ steps.deploy.outputs.supplierStorageName }} \
+            --resource-group ${{ steps.deploy.outputs.rgSupplier }} \
+            --query '[0].value' \
+            --output tsv)
+          
+          SUPPLIER_CONN_STRING="DefaultEndpointsProtocol=https;AccountName=${{ steps.deploy.outputs.supplierStorageName }};AccountKey=$SUPPLIER_KEY;EndpointSuffix=core.windows.net"
+          
+          az keyvault secret set \
+            --vault-name ${{ steps.deploy.outputs.keyVaultName }} \
+            --name ${{ steps.deploy.outputs.supplierContentSecret }} \
+            --value "$SUPPLIER_CONN_STRING" \
+            --output none
+          
+          echo "✅ Supplier content-share connection string published to Key Vault"
+        shell: bash
+
+      - name: Restart Logic Apps to pick up content-share settings
+        run: |
+          echo "Restarting Logic Apps..."
+          
+          az logicapp restart \
+            --name ${{ steps.deploy.outputs.purchaserLogicAppName }} \
+            --resource-group ${{ steps.deploy.outputs.rgPurchaser }}
+          
+          az logicapp restart \
+            --name ${{ steps.deploy.outputs.supplierLogicAppName }} \
+            --resource-group ${{ steps.deploy.outputs.rgSupplier }}
+          
+          echo "✅ Logic Apps restarted"
+        shell: bash
+
+      - name: Post-Deploy - Create SQL contained users and custom roles
+        run: |
+          echo "Creating SQL contained users and custom roles..."
+          
+          # Acquire Entra access token for SQL
+          ACCESS_TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken --output tsv)
+          
+          # Substitute UAMI names into SQL script
+          sed -e "s/{{PURCHASER_UAMI_NAME}}/${{ steps.deploy.outputs.purchaserUamiName }}/g" \
+              -e "s/{{SUPPLIER_UAMI_NAME}}/${{ steps.deploy.outputs.supplierUamiName }}/g" \
+              infra/sql/create-users-roles.sql > /tmp/create-users-roles-substituted.sql
+          
+          # Execute T-SQL using sqlcmd
+          sqlcmd -S ${{ steps.deploy.outputs.sqlServerFqdn }} \
+                  -d ${{ steps.deploy.outputs.sqlDatabaseName }} \
+                  -G \
+                  -P "$ACCESS_TOKEN" \
+                  -i /tmp/create-users-roles-substituted.sql
+          
+          echo "✅ SQL contained users and custom roles created"
+        shell: bash
+
+      - name: Deployment complete
+        run: |
+          echo "=========================================="
+          echo "✅ Infrastructure deployment complete"
+          echo "=========================================="
+          echo ""
+          echo "Key Vault: ${{ steps.deploy.outputs.keyVaultName }}"
+          echo "Purchaser Logic App: ${{ steps.deploy.outputs.purchaserLogicAppName }}"
+          echo "Supplier Logic App: ${{ steps.deploy.outputs.supplierLogicAppName }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Run the manual certificate generation script (see docs)"
+          echo "2. Deploy Logic App workflows (see docs)"

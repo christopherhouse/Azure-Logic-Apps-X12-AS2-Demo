@@ -1,11 +1,59 @@
-# TODO (work item #19)
+# Infrastructure Validation Workflow
+# 
+# Triggers: pull_request, workflow_dispatch
+# Purpose: Lint Bicep templates and run what-if analysis before merge
+#
+# Prerequisites:
+# - GitHub secrets configured:
+#   - AZURE_CLIENT_ID: Service Principal / App Registration client ID
+#   - AZURE_TENANT_ID: 76de2d2d-77f8-438d-9a87-01806f2345da
+#   - AZURE_SUBSCRIPTION_ID: 8bd05b2f-62c5-4def-9869-f0617ebb3970
+# - Federated credential configured for this repo (OIDC)
+# - Service principal must have read access to subscription for what-if
+
 name: Validate Infrastructure
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - '.github/workflows/validate.yml'
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   validate:
+    name: Lint and What-If
     runs-on: ubuntu-latest
+    
     steps:
-      - run: echo "TODO: lint + what-if — implemented in a later work item"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Lint Bicep template
+        run: |
+          az bicep lint --file infra/main.bicep
+        shell: bash
+
+      - name: Run what-if analysis
+        run: |
+          az deployment sub what-if \
+            --location centralus \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam
+        shell: bash
+
+      - name: Validation complete
+        run: echo "✅ Infrastructure validation passed"

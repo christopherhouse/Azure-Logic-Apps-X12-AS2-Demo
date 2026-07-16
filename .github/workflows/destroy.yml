@@ -1,11 +1,126 @@
-# TODO (work item #21)
+# Infrastructure Destruction Workflow
+# 
+# Triggers: workflow_dispatch (manual only with confirmation)
+# Purpose: Tear down all Azure resources in reverse dependency order
+#
+# Prerequisites:
+# - GitHub secrets configured:
+#   - AZURE_CLIENT_ID: Service Principal / App Registration client ID
+#   - AZURE_TENANT_ID: 76de2d2d-77f8-438d-9a87-01806f2345da
+#   - AZURE_SUBSCRIPTION_ID: 8bd05b2f-62c5-4def-9869-f0617ebb3970
+# - Federated credential configured for this repo (OIDC)
+# - Service principal must have Contributor at subscription scope
+#
+# WARNING: This workflow permanently deletes all resources. Key Vault purge protection
+# is disabled (false) in dev, so the vault will be purged to allow clean re-deployment.
+
 name: Destroy Infrastructure
 
 on:
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type "DESTROY" to confirm deletion of all resources'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   destroy:
+    name: Destroy Azure Resources
     runs-on: ubuntu-latest
+    
     steps:
-      - run: echo "TODO: tear down all three RGs — implemented in a later work item"
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirmation }}" != "DESTROY" ]; then
+            echo "❌ Confirmation failed. You must type 'DESTROY' to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation received. Proceeding with destruction..."
+        shell: bash
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Delete resource groups
+        run: |
+          echo "Deleting resource groups in reverse dependency order..."
+          
+          # Delete in reverse order: purchaser, supplier, shared
+          # (reverse of deployment order per infra-deploy-ordering.md)
+          
+          echo "Deleting rg-edi-purchaser..."
+          az group delete --name rg-edi-purchaser --yes --no-wait
+          
+          echo "Deleting rg-edi-supplier..."
+          az group delete --name rg-edi-supplier --yes --no-wait
+          
+          echo "Deleting rg-edi-shared..."
+          az group delete --name rg-edi-shared --yes --no-wait
+          
+          echo "✅ Resource group deletion initiated (running in background)"
+        shell: bash
+
+      - name: Wait for resource group deletion
+        run: |
+          echo "Waiting for resource groups to be deleted..."
+          
+          # Poll until all three resource groups are gone
+          while az group exists --name rg-edi-purchaser --output tsv | grep -q true || \
+                az group exists --name rg-edi-supplier --output tsv | grep -q true || \
+                az group exists --name rg-edi-shared --output tsv | grep -q true; do
+            echo "Resource groups still deleting... waiting 30 seconds"
+            sleep 30
+          done
+          
+          echo "✅ All resource groups deleted"
+        shell: bash
+
+      - name: Purge soft-deleted Key Vault
+        run: |
+          echo "Purging soft-deleted Key Vault..."
+          
+          # Key Vault name follows CAF naming: kv-edi-{token}-{env}-{hash}
+          # We need to find the soft-deleted vault in centralus
+          
+          DELETED_VAULTS=$(az keyvault list-deleted \
+            --resource-type vault \
+            --query "[?properties.location=='centralus'].name" \
+            --output tsv)
+          
+          if [ -z "$DELETED_VAULTS" ]; then
+            echo "No soft-deleted Key Vaults found in Central US"
+          else
+            for VAULT_NAME in $DELETED_VAULTS; do
+              echo "Purging vault: $VAULT_NAME"
+              az keyvault purge --name "$VAULT_NAME" --location centralus --no-wait
+            done
+            echo "✅ Key Vault purge initiated"
+          fi
+        shell: bash
+
+      - name: Destruction complete
+        run: |
+          echo "=========================================="
+          echo "✅ Infrastructure destruction complete"
+          echo "=========================================="
+          echo ""
+          echo "All resource groups deleted:"
+          echo "- rg-edi-shared"
+          echo "- rg-edi-supplier"
+          echo "- rg-edi-purchaser"
+          echo ""
+          echo "Key Vault purged (if found in soft-delete state)"
+          echo ""
+          echo "Environment is clean for re-deployment."
