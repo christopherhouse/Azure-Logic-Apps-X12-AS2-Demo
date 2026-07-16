@@ -238,27 +238,22 @@ module supplierCompute 'compute/logicapp-bundle.bicep' = {
 }
 
 // ============================================================================
-// TODO: RBAC ASSIGNMENTS (#14)
+// RBAC ASSIGNMENTS (#14)
 // ============================================================================
-// module rbac 'rbac/role-assignments.bicep' = {
-//   name: 'deploy-rbac'
-//   params: {
-//     purchaserUamiPrincipalId: purchaserUami.outputs.principalId
-//     supplierUamiPrincipalId: supplierUami.outputs.principalId
-//     keyVaultId: keyVault.outputs.id
-//     serviceBusId: serviceBus.outputs.id
-//     purchaserStorageId: purchaserCompute.outputs.storageId
-//     supplierStorageId: supplierCompute.outputs.storageId
-//   }
-//   dependsOn: [
-//     purchaserUami
-//     supplierUami
-//     purchaserCompute
-//     supplierCompute
-//     keyVault
-//     serviceBus
-//   ]
-// }
+module rbac 'rbac/role-assignments.bicep' = {
+  name: 'deploy-rbac'
+  params: {
+    purchaserUamiPrincipalId: purchaserUami.outputs.principalId
+    supplierUamiPrincipalId: supplierUami.outputs.principalId
+    keyVaultId: keyVault.outputs.id
+    serviceBusNamespaceId: serviceBus.outputs.namespaceId
+    purchaserStorageId: purchaserCompute.outputs.storageId
+    supplierStorageId: supplierCompute.outputs.storageId
+    rgPurchaser: rgPurchaser
+    rgSupplier: rgSupplier
+    rgShared: rgShared
+  }
+}
 
 // ============================================================================
 // OUTPUTS

@@ -43,6 +43,36 @@ Two operations are **out-of-band (not Bicep, not Deployment Scripts):**
 
 **Open item (#18):** the deploy identity needs **Contributor + User Access Administrator at subscription scope** because the deployment itself creates the RGs and the role assignments — RG-scoped grants cannot authorize either. Reconcile before first `deploy.yml` run (owner: coordinator + Zoe). Does not block design; blocks first successful deploy.
 
+### 2026-07-16: Native Bicep creates the three resource groups
+**By:** Kaylee
+**What:** `infra/main.bicep` uses native `Microsoft.Resources/resourceGroups@2024-03-01` resources to create `rg-edi-shared`, `rg-edi-supplier`, and `rg-edi-purchaser` from the subscription-scoped deployment.
+**Why:** Resource group creation is simple enough that native Bicep is clearer and avoids unnecessary AVM registry indirection. AVM remains preferred for downstream complex resources where it adds value.
+**References:** `infra/main.bicep`, work items #3/#4/#5, `docs/Azure-Logic-Apps-EDI-Infrastructure-Engineering-Spec.md`.
+
+### 2026-07-16: Shared tier modules are native Bicep and diagnostics-first
+**By:** Kaylee
+**What:** The shared tier uses native modules under `infra/shared/` for Log Analytics Workspace, workspace-based Application Insights, SQL Server + serverless database, and Service Bus Standard with topic `purchase-orders.received` and subscription `all-messages`. Outputs are exposed through `infra/main.bicep` for later RBAC, app settings, and CI steps.
+**Why:** Native Bicep keeps these demo-critical resources transparent: the SQL Entra-only admin and serverless settings, Service Bus topic/subscription shape, and diagnostics wiring are easier to inspect directly than through AVM wrappers. Diagnostics use LAW as the sink; public network access and `SecurityControl=Ignore` match the locked demo posture.
+**References:** `infra/shared/law.bicep`, `infra/shared/appinsights.bicep`, `infra/shared/sql.bicep`, `infra/shared/servicebus.bicep`, `infra/main.bicep`, work items #6/#9/#10.
+
+### 2026-07-16: Security tier uses RBAC Key Vault, separate UAMIs, and a manual cert script
+**By:** Zoe
+**What:** Key Vault is deployed in `rg-edi-shared` with Azure RBAC authorization, public network access, diagnostics to LAW, soft delete, and parameterized purge protection defaulting to `false`. Purchaser and supplier each receive separate UAMIs through `infra/modules/managed-identity.bicep`. `infra/scripts/generate-certificates.ps1` is the manually-run operator script for the Demo Root CA plus four AS2 leaf certificates; it imports certs directly to Key Vault and does not write cert files to disk.
+**Why:** RBAC-only Key Vault aligns permissions across Azure resources. Separate UAMIs avoid system-assigned identity/RBAC ordering cycles and enforce purchaser/supplier separation. Certificate generation remains out of Bicep/CI because it creates private keys and the spec forbids Deployment Scripts without approval.
+**References:** `infra/shared/keyvault.bicep`, `infra/modules/managed-identity.bicep`, `infra/scripts/generate-certificates.ps1`, work items #7/#8/#11/#12.
+
+### 2026-07-16: Logic App Standard WS1 content share requires a Key Vault-referenced storage key
+**By:** Kaylee
+**What:** `AzureWebJobsStorage` uses managed identity settings, but the WS1/Workflow Service Plan content share uses the sanctioned storage-key exception through `WEBSITE_CONTENTAZUREFILECONNECTIONSTRING = @Microsoft.KeyVault(SecretUri=...)` plus `WEBSITE_CONTENTSHARE`. The app sets `keyVaultReferenceIdentity` to its UAMI so the platform resolves the Key Vault reference with the correct identity.
+**Why:** Microsoft guidance says Standard Logic Apps on Workflow Service Plan currently cannot disable storage account key access for the content share; managed-identity-only content storage is supported only on ASE v3. Inline keys and `listKeys()` in Bicep are rejected. A post-`main.bicep` CI/operator step must publish the purchaser and supplier content-share connection strings as Key Vault secrets, then restart both Logic Apps.
+**References:** `infra/compute/logicapp-bundle.bicep`, work items #13/#14/#16, Microsoft Learn Logic Apps managed identity storage guidance.
+
+### 2026-07-16: Built-in Service Bus and SQL connectors use managed identity app settings
+**By:** Wash
+**What:** Both Logic Apps have `connections.json` and valid empty `parameters.json` files. Built-in `serviceBus` and `sql` service-provider connections resolve endpoints and UAMI client IDs from app settings: `serviceBus__fullyQualifiedNamespace`, `serviceBus__credential`, `serviceBus__clientId`, `sql__serverFqdn`, `sql__databaseName`, and `sql__clientId`. Bicep passes the SQL and Service Bus outputs into both compute module invocations.
+**Why:** This preserves the managed-identity-only connector contract and avoids secrets, connection strings, and `Microsoft.Web/connections`. RBAC and SQL-role CI steps supply the actual runtime authorization for purchaser/supplier.
+**References:** `logicapps/purchaser/connections.json`, `logicapps/supplier/connections.json`, `logicapps/purchaser/parameters.json`, `logicapps/supplier/parameters.json`, `infra/compute/logicapp-bundle.bicep`, `infra/main.bicep`, work item #17.
+
 ## Governance
 
 - All meaningful changes require team consensus
