@@ -26,13 +26,10 @@ name: Deploy Infrastructure
 
 on:
   workflow_dispatch:
-  # Uncomment below to enable automatic deploy on push to main
-  # push:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'infra/**'
-  #     - '.github/workflows/deploy.yml'
+  # Every merge to main deploys to Azure (per owner directive).
+  push:
+    branches:
+      - main
 
 permissions:
   id-token: write

@@ -206,7 +206,6 @@ module purchaserCompute 'compute/logicapp-bundle.bicep' = {
     uamiId: purchaserUami.outputs.id
     uamiClientId: purchaserUami.outputs.clientId
     appInsightsConnectionString: applicationInsights.outputs.connectionString
-    keyVaultUri: keyVault.outputs.uri
     serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
     sqlServerFqdn: sqlServer.outputs.serverFqdn
     sqlDatabaseName: sqlServer.outputs.databaseName
@@ -230,7 +229,6 @@ module supplierCompute 'compute/logicapp-bundle.bicep' = {
     uamiId: supplierUami.outputs.id
     uamiClientId: supplierUami.outputs.clientId
     appInsightsConnectionString: applicationInsights.outputs.connectionString
-    keyVaultUri: keyVault.outputs.uri
     serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
     sqlServerFqdn: sqlServer.outputs.serverFqdn
     sqlDatabaseName: sqlServer.outputs.databaseName

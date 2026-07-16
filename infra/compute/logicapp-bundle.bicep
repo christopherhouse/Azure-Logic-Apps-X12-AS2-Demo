@@ -43,9 +43,6 @@ param uamiClientId string
 @description('Application Insights connection string (from the shared tier)')
 param appInsightsConnectionString string
 
-@description('Key Vault URI (ends with a trailing slash), used to build the content-share secret reference')
-param keyVaultUri string
-
 @description('WEBSITE_NODE_DEFAULT_VERSION value for the Logic App runtime')
 param nodeDefaultVersion string = '~22'
 
@@ -58,10 +55,9 @@ param sqlServerFqdn string
 @description('SQL Database name (for built-in connector)')
 param sqlDatabaseName string
 
-// The Key Vault secret that CI publishes out-of-band with the Azure Files connection string.
-// The compute module only references it; it does NOT author the secret (see decision doc).
+// Retained as an output for reference. The content share now uses an inline connection string
+// (listKeys) because the Windows WS1 hosting model requires it at site-create time.
 var contentShareSecretName = 'contentshare-${storageName}'
-var contentShareSecretRef = '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/${contentShareSecretName}/)'
 
 // Content share name — deterministic and lowercase for idempotency.
 var contentShareName = toLower(logicAppName)
@@ -166,11 +162,13 @@ resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'AzureWebJobsStorage__clientId'
           value: uamiClientId
         }
-        // --- Content share (Azure Files) — sanctioned key exception, Key Vault-referenced ---
-        // The secret is published out-of-band by CI (see decision doc); never inlined here.
+        // --- Content share (Azure Files) — sanctioned key exception (spec permits the Azure Files
+        // connection string for the Windows hosting model). Must be a REAL connection string at
+        // site-create time; a Key Vault reference fails ARM preflight (CouldNotAccessStorageAccount).
+        // The storage key stays out of source — resolved at deploy time via listKeys().
         {
           name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: contentShareSecretRef
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
         }
         {
           name: 'WEBSITE_CONTENTSHARE'
