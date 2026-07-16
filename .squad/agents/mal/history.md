@@ -9,3 +9,5 @@
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+📌 Team update (2026-07-16T11:20:48-05:00): infra build complete (17 resources what-if-validated); CI/CD OIDC-based; docs at README + docs/deployment-guide.md; open item = provision deployment SP + GH secrets (#18) once gh re-authed.

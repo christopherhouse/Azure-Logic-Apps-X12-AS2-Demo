@@ -73,6 +73,24 @@ Two operations are **out-of-band (not Bicep, not Deployment Scripts):**
 **Why:** This preserves the managed-identity-only connector contract and avoids secrets, connection strings, and `Microsoft.Web/connections`. RBAC and SQL-role CI steps supply the actual runtime authorization for purchaser/supplier.
 **References:** `logicapps/purchaser/connections.json`, `logicapps/supplier/connections.json`, `logicapps/purchaser/parameters.json`, `logicapps/supplier/parameters.json`, `infra/compute/logicapp-bundle.bicep`, `infra/main.bicep`, work item #17.
 
+### 2026-07-16: Least-privilege RBAC role assignments implemented (#14)
+**By:** Zoe
+**What:** Implemented all 14 least-privilege Azure RBAC role assignments for the purchaser and supplier UAMIs via `infra/rbac/role-assignments.bicep` and `infra/modules/role-assignment.bicep`, wired from `infra/main.bicep`. Each app identity receives exact resource-scoped storage host roles, Key Vault Secrets User, Key Vault Certificate User, and asymmetric Service Bus data roles: purchaser = Data Sender, supplier = Data Receiver.
+**Why:** The grants keep runtime access managed-identity-only and resource-scoped, avoid broad Owner/Contributor/User Access Administrator grants for app identities, preserve purchaser/supplier separation, and allow Logic Apps Standard host storage plus AS2 certificate use without inlined secrets. SQL permissions remain outside Azure RBAC and are handled by the CI T-SQL step.
+**References:** `infra/rbac/role-assignments.bicep`, `infra/modules/role-assignment.bicep`, `infra/main.bicep`, work item #14, `.squad/decisions/inbox/zoe-rbac.md`.
+
+### 2026-07-16: CI/CD workflows and SQL user/role step implemented (#15/#19/#20/#21)
+**By:** Kaylee
+**What:** Implemented GitHub Actions workflows for validation, deployment, and teardown: `.github/workflows/validate.yml`, `.github/workflows/deploy.yml`, and `.github/workflows/destroy.yml`. Authentication is OIDC-only using `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. `deploy.yml` runs subscription-scoped Bicep, publishes Logic App content-share storage keys to Key Vault as the sanctioned WS1 exception, restarts the Logic Apps, and runs `infra/sql/create-users-roles.sql` with an Entra SQL token to create contained UAMI users plus `PurchaserRole` and `SupplierRole`.
+**Why:** The pipeline keeps deploy credentials out of GitHub secrets, preserves the locked subscription-scoped deployment ordering, automates the idempotent post-deploy work that depends on deployment outputs, and keeps SQL permissions least-privilege without using `db_owner`. The deployment identity prerequisite remains Contributor + User Access Administrator at subscription scope plus membership in SQL admin group `b9dac399-abc0-479d-9900-f2115a98297d`.
+**References:** `.github/workflows/validate.yml`, `.github/workflows/deploy.yml`, `.github/workflows/destroy.yml`, `infra/sql/create-users-roles.sql`, work items #15/#19/#20/#21, `.squad/decisions/inbox/kaylee-cicd.md`.
+
+### 2026-07-16: Infrastructure documentation completed (#23)
+**By:** Book
+**What:** Completed infrastructure documentation in `README.md`, `docs/deployment-guide.md`, and `docs/trading-partner-onboarding.md`. The docs cover demo purpose, architecture, repository structure, prerequisites, OIDC setup, subscription-scoped deployment, manual certificate generation, verification, teardown, troubleshooting, CI/CD workflows, known limitations, and deferred EDI/trading-partner implementation details.
+**Why:** The project now has an operator-ready deployment runbook and onboarding scaffold that serialize the locked decisions, including the manual cert step, CI SQL user/role step, subscription-scope OIDC deployment identity, public-network demo posture, and deferred workflow/schema/map/trading-partner implementation scope.
+**References:** `README.md`, `docs/deployment-guide.md`, `docs/trading-partner-onboarding.md`, work item #23, `.squad/decisions/inbox/book-docs.md`.
+
 ## Governance
 
 - All meaningful changes require team consensus
