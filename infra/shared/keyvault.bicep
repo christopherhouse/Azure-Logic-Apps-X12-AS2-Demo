@@ -33,7 +33,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true // RBAC-only; no access policies
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
-    enablePurgeProtection: enablePurgeProtection // default false; destroy.yml can fully tear down
+    enablePurgeProtection: enablePurgeProtection ? true : null // Azure rejects an explicit false; omit the property when disabled so destroy.yml can fully tear down
     publicNetworkAccess: 'Enabled'
     networkAcls: {
       defaultAction: 'Allow'
