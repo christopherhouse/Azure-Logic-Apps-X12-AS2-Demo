@@ -1,0 +1,32 @@
+{
+  "serviceProviderConnections": {
+    "serviceBus": {
+      "parameterValues": {
+        "fullyQualifiedNamespace": "@appsetting('serviceBus__fullyQualifiedNamespace')",
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "identity": "@appsetting('serviceBus__clientId')"
+        }
+      },
+      "serviceProvider": {
+        "id": "/serviceProviders/serviceBus"
+      },
+      "displayName": "Service Bus (Managed Identity)"
+    },
+    "sql": {
+      "parameterValues": {
+        "server": "@appsetting('sql__serverFqdn')",
+        "database": "@appsetting('sql__databaseName')",
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "identity": "@appsetting('sql__clientId')"
+        }
+      },
+      "serviceProvider": {
+        "id": "/serviceProviders/sql"
+      },
+      "displayName": "SQL Database (Managed Identity)"
+    }
+  },
+  "managedApiConnections": {}
+}
