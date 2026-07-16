@@ -28,6 +28,9 @@ param sharedLocation string = 'centralus'
 @description('Location for purchaser resources')
 param purchaserLocation string = 'eastus2'
 
+@description('Enable Key Vault purge protection (default: false for dev/test; set true for production)')
+param enablePurgeProtection bool = false
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -110,21 +113,19 @@ module applicationInsights 'shared/appinsights.bicep' = {
 }
 
 // ============================================================================
-// TODO: KEY VAULT (#8)
+// KEY VAULT (#7)
 // ============================================================================
-// module keyVault 'shared/keyvault.bicep' = {
-//   name: 'deploy-keyvault'
-//   scope: resourceGroup(rgShared)
-//   params: {
-//     name: names.outputs.keyVault
-//     location: sharedLocation
-//     tags: commonTags
-//     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
-//   }
-//   dependsOn: [
-//     logAnalyticsWorkspace
-//   ]
-// }
+module keyVault 'shared/keyvault.bicep' = {
+  name: 'deploy-keyvault'
+  scope: resourceGroup(rgShared)
+  params: {
+    name: names.outputs.keyVault
+    location: sharedLocation
+    tags: commonTags
+    enablePurgeProtection: enablePurgeProtection
+    logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+  }
+}
 
 // ============================================================================
 // SQL SERVER + DATABASE (#9)
@@ -160,33 +161,33 @@ module serviceBus 'shared/servicebus.bicep' = {
 }
 
 // ============================================================================
-// TODO: USER-ASSIGNED MANAGED IDENTITIES (#11, #12)
+// USER-ASSIGNED MANAGED IDENTITIES (#11, #12)
 // ============================================================================
-// module purchaserUami 'identity/uami.bicep' = {
-//   name: 'deploy-purchaser-uami'
-//   scope: resourceGroup(rgPurchaser)
-//   params: {
-//     name: names.outputs.purchaserUami
-//     location: purchaserLocation
-//     tags: commonTags
-//   }
-//   dependsOn: [
-//     rgPurchaserResource
-//   ]
-// }
+module purchaserUami 'modules/managed-identity.bicep' = {
+  name: 'deploy-purchaser-uami'
+  scope: resourceGroup(rgPurchaser)
+  params: {
+    name: names.outputs.purchaserUami
+    location: purchaserLocation
+    tags: commonTags
+  }
+  dependsOn: [
+    rgPurchaserResource
+  ]
+}
 
-// module supplierUami 'identity/uami.bicep' = {
-//   name: 'deploy-supplier-uami'
-//   scope: resourceGroup(rgSupplier)
-//   params: {
-//     name: names.outputs.supplierUami
-//     location: sharedLocation
-//     tags: commonTags
-//   }
-//   dependsOn: [
-//     rgSupplierResource
-//   ]
-// }
+module supplierUami 'modules/managed-identity.bicep' = {
+  name: 'deploy-supplier-uami'
+  scope: resourceGroup(rgSupplier)
+  params: {
+    name: names.outputs.supplierUami
+    location: sharedLocation
+    tags: commonTags
+  }
+  dependsOn: [
+    rgSupplierResource
+  ]
+}
 
 // ============================================================================
 // TODO: PURCHASER COMPUTE BUNDLE (#13)
@@ -279,3 +280,16 @@ output serviceBusNamespaceId string = serviceBus.outputs.namespaceId
 output serviceBusFullyQualifiedNamespace string = serviceBus.outputs.fullyQualifiedNamespace
 output serviceBusTopicName string = serviceBus.outputs.topicName
 output serviceBusSubscriptionName string = serviceBus.outputs.subscriptionName
+
+// Key Vault outputs
+output keyVaultId string = keyVault.outputs.id
+output keyVaultName string = keyVault.outputs.name
+output keyVaultUri string = keyVault.outputs.uri
+
+// UAMI outputs (for RBAC #14, SQL users #15, app settings #16/#17)
+output purchaserUamiId string = purchaserUami.outputs.id
+output purchaserUamiClientId string = purchaserUami.outputs.clientId
+output purchaserUamiPrincipalId string = purchaserUami.outputs.principalId
+output supplierUamiId string = supplierUami.outputs.id
+output supplierUamiClientId string = supplierUami.outputs.clientId
+output supplierUamiPrincipalId string = supplierUami.outputs.principalId

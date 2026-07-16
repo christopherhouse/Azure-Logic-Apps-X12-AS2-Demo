@@ -11,3 +11,4 @@ param namingToken = 'jci'
 param environmentName = 'dev'
 param sharedLocation = 'centralus'
 param purchaserLocation = 'eastus2'
+param enablePurgeProtection = false
