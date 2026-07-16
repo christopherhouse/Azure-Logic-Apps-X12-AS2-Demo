@@ -190,52 +190,54 @@ module supplierUami 'modules/managed-identity.bicep' = {
 }
 
 // ============================================================================
-// TODO: PURCHASER COMPUTE BUNDLE (#13)
+// PURCHASER COMPUTE BUNDLE (#13, app settings #16) — rg-edi-purchaser (East US 2)
+// WS1 plan + empty Logic App Standard + storage + Free Integration Account, purchaser UAMI attached.
 // ============================================================================
-// module purchaserCompute 'compute/logicapp-bundle.bicep' = {
-//   name: 'deploy-purchaser-compute'
-//   scope: resourceGroup(rgPurchaser)
-//   params: {
-//     planName: names.outputs.purchaserPlan
-//     logicAppName: names.outputs.purchaserLogicApp
-//     storageName: names.outputs.purchaserStorage
-//     integrationAccountName: names.outputs.purchaserIntegrationAccount
-//     location: purchaserLocation
-//     tags: commonTags
-//     uamiId: purchaserUami.outputs.id
-//     uamiClientId: purchaserUami.outputs.clientId
-//   }
-//   dependsOn: [
-//     purchaserUami
-//     keyVault
-//     sqlServer
-//     serviceBus
-//   ]
-// }
+module purchaserCompute 'compute/logicapp-bundle.bicep' = {
+  name: 'deploy-purchaser-compute'
+  scope: resourceGroup(rgPurchaser)
+  params: {
+    planName: names.outputs.purchaserPlan
+    logicAppName: names.outputs.purchaserLogicApp
+    storageName: names.outputs.purchaserStorage
+    integrationAccountName: names.outputs.purchaserIntegrationAccount
+    location: purchaserLocation
+    tags: commonTags
+    uamiId: purchaserUami.outputs.id
+    uamiClientId: purchaserUami.outputs.clientId
+    appInsightsConnectionString: applicationInsights.outputs.connectionString
+    keyVaultUri: keyVault.outputs.uri
+  }
+  dependsOn: [
+    sqlServer
+    serviceBus
+  ]
+}
 
 // ============================================================================
-// TODO: SUPPLIER COMPUTE BUNDLE (#14)
+// SUPPLIER COMPUTE BUNDLE (#14/#12, app settings #16) — rg-edi-supplier (Central US)
+// WS1 plan + empty Logic App Standard + storage + Free Integration Account, supplier UAMI attached.
 // ============================================================================
-// module supplierCompute 'compute/logicapp-bundle.bicep' = {
-//   name: 'deploy-supplier-compute'
-//   scope: resourceGroup(rgSupplier)
-//   params: {
-//     planName: names.outputs.supplierPlan
-//     logicAppName: names.outputs.supplierLogicApp
-//     storageName: names.outputs.supplierStorage
-//     integrationAccountName: names.outputs.supplierIntegrationAccount
-//     location: sharedLocation
-//     tags: commonTags
-//     uamiId: supplierUami.outputs.id
-//     uamiClientId: supplierUami.outputs.clientId
-//   }
-//   dependsOn: [
-//     supplierUami
-//     keyVault
-//     sqlServer
-//     serviceBus
-//   ]
-// }
+module supplierCompute 'compute/logicapp-bundle.bicep' = {
+  name: 'deploy-supplier-compute'
+  scope: resourceGroup(rgSupplier)
+  params: {
+    planName: names.outputs.supplierPlan
+    logicAppName: names.outputs.supplierLogicApp
+    storageName: names.outputs.supplierStorage
+    integrationAccountName: names.outputs.supplierIntegrationAccount
+    location: sharedLocation
+    tags: commonTags
+    uamiId: supplierUami.outputs.id
+    uamiClientId: supplierUami.outputs.clientId
+    appInsightsConnectionString: applicationInsights.outputs.connectionString
+    keyVaultUri: keyVault.outputs.uri
+  }
+  dependsOn: [
+    sqlServer
+    serviceBus
+  ]
+}
 
 // ============================================================================
 // TODO: RBAC ASSIGNMENTS (#14)
@@ -293,3 +295,18 @@ output purchaserUamiPrincipalId string = purchaserUami.outputs.principalId
 output supplierUamiId string = supplierUami.outputs.id
 output supplierUamiClientId string = supplierUami.outputs.clientId
 output supplierUamiPrincipalId string = supplierUami.outputs.principalId
+
+// Compute bundle outputs (#13/#14): Logic App names, default host names, integration account ids
+output purchaserLogicAppName string = purchaserCompute.outputs.logicAppName
+output purchaserLogicAppDefaultHostName string = purchaserCompute.outputs.defaultHostName
+output purchaserIntegrationAccountId string = purchaserCompute.outputs.integrationAccountId
+output purchaserStorageId string = purchaserCompute.outputs.storageId
+output purchaserStorageName string = purchaserCompute.outputs.storageName
+output purchaserContentShareSecretName string = purchaserCompute.outputs.contentShareSecretName
+
+output supplierLogicAppName string = supplierCompute.outputs.logicAppName
+output supplierLogicAppDefaultHostName string = supplierCompute.outputs.defaultHostName
+output supplierIntegrationAccountId string = supplierCompute.outputs.integrationAccountId
+output supplierStorageId string = supplierCompute.outputs.storageId
+output supplierStorageName string = supplierCompute.outputs.storageName
+output supplierContentShareSecretName string = supplierCompute.outputs.contentShareSecretName
