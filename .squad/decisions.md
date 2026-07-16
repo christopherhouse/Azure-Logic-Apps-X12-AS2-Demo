@@ -91,6 +91,18 @@ Two operations are **out-of-band (not Bicep, not Deployment Scripts):**
 **Why:** The project now has an operator-ready deployment runbook and onboarding scaffold that serialize the locked decisions, including the manual cert step, CI SQL user/role step, subscription-scope OIDC deployment identity, public-network demo posture, and deferred workflow/schema/map/trading-partner implementation scope.
 **References:** `README.md`, `docs/deployment-guide.md`, `docs/trading-partner-onboarding.md`, work item #23, `.squad/decisions/inbox/book-docs.md`.
 
+### 2026-07-16T17-29-57: Christopher accepted the native-Bicep-over-AVM deviation from the spec; no AVM rework — native modules stand for this demo.
+**By:** Christopher-House
+**What:** Christopher accepted the native-Bicep-over-AVM deviation from the spec; no AVM rework — native modules stand for this demo.
+**References:** docs/Azure-Logic-Apps-EDI-Infrastructure-Engineering-Spec.md, docs/infra-acceptance-validation.md, infra/, Jayne, Kaylee, Mal
+**Why:** The Infrastructure v1.0 spec states "prefer Azure Verified Modules (AVM) wherever feasible; fall back to native Bicep only when an AVM cannot satisfy a material requirement." The team implemented all resources with native Bicep (documented rationale: transparency and simplicity for a demo). Jayne flagged the deviation during acceptance validation (#22). Christopher reviewed and elected to KEEP native Bicep and accept the documented deviation from the spec's AVM preference. No rework required; native modules stand as the implementation for this demo.
+
+### 2026-07-16T12:36:00-05:00: GitHub OIDC deployment identity provisioned for CI/CD
+**By:** Zoe
+**What:** Provisioned GitHub OIDC federated authentication for repository `christopherhouse/Azure-Logic-Apps-X12-AS2-Demo` against subscription `8bd05b2f-62c5-4def-9869-f0617ebb3970`. The app registration/service principal `sp-edi-jci-dev-gh-oidc` was created with client ID `923efbd9-17d1-468c-bc7c-5828856848c6`, federated credentials for `main` and pull requests, subscription-scoped Contributor and User Access Administrator role assignments, SQL Entra admin group membership, and GitHub repo secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`.
+**References:** work item #18, `.github/workflows/validate.yml`, `.github/workflows/deploy.yml`, `.github/workflows/destroy.yml`, subscription `8bd05b2f-62c5-4def-9869-f0617ebb3970`, SQL admin group `b9dac399-abc0-479d-9900-f2115a98297d`.
+**Why:** The subscription-scoped Bicep deployment creates resource groups and role assignments, so the deploy identity needs subscription-scope Contributor + User Access Administrator. SQL admin group membership allows the CI SQL step to use Entra authentication for contained users and custom roles. OIDC keeps CI/CD passwordless with no client secret.
+
 ## Governance
 
 - All meaningful changes require team consensus
