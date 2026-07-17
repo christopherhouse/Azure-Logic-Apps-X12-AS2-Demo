@@ -98,82 +98,34 @@ jobs:
           echo "✅ Deployment outputs captured"
         shell: bash
 
-      - name: Post-Deploy - Publish content-share connection strings to Key Vault
-        run: |
-          echo "Publishing content-share connection strings..."
-          
-          # Purchaser storage
-          PURCHASER_KEY=$(az storage account keys list \
-            --account-name ${{ steps.deploy.outputs.purchaserStorageName }} \
-            --resource-group ${{ steps.deploy.outputs.rgPurchaser }} \
-            --query '[0].value' \
-            --output tsv)
-          
-          PURCHASER_CONN_STRING="DefaultEndpointsProtocol=https;AccountName=${{ steps.deploy.outputs.purchaserStorageName }};AccountKey=$PURCHASER_KEY;EndpointSuffix=core.windows.net"
-          
-          az keyvault secret set \
-            --vault-name ${{ steps.deploy.outputs.keyVaultName }} \
-            --name ${{ steps.deploy.outputs.purchaserContentSecret }} \
-            --value "$PURCHASER_CONN_STRING" \
-            --output none
-          
-          echo "✅ Purchaser content-share connection string published to Key Vault"
-          
-          # Supplier storage
-          SUPPLIER_KEY=$(az storage account keys list \
-            --account-name ${{ steps.deploy.outputs.supplierStorageName }} \
-            --resource-group ${{ steps.deploy.outputs.rgSupplier }} \
-            --query '[0].value' \
-            --output tsv)
-          
-          SUPPLIER_CONN_STRING="DefaultEndpointsProtocol=https;AccountName=${{ steps.deploy.outputs.supplierStorageName }};AccountKey=$SUPPLIER_KEY;EndpointSuffix=core.windows.net"
-          
-          az keyvault secret set \
-            --vault-name ${{ steps.deploy.outputs.keyVaultName }} \
-            --name ${{ steps.deploy.outputs.supplierContentSecret }} \
-            --value "$SUPPLIER_CONN_STRING" \
-            --output none
-          
-          echo "✅ Supplier content-share connection string published to Key Vault"
-        shell: bash
-
-      - name: Restart Logic Apps to pick up content-share settings
-        run: |
-          echo "Restarting Logic Apps..."
-          
-          az logicapp restart \
-            --name ${{ steps.deploy.outputs.purchaserLogicAppName }} \
-            --resource-group ${{ steps.deploy.outputs.rgPurchaser }}
-          
-          az logicapp restart \
-            --name ${{ steps.deploy.outputs.supplierLogicAppName }} \
-            --resource-group ${{ steps.deploy.outputs.rgSupplier }}
-          
-          echo "✅ Logic Apps restarted"
-        shell: bash
-
       - name: Post-Deploy - Create SQL contained users and custom roles
+        shell: pwsh
         run: |
-          echo "Creating SQL contained users and custom roles..."
-          
-          # Acquire Entra access token for SQL
-          ACCESS_TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken --output tsv)
-          
-          # Substitute UAMI names into SQL script
-          sed -e "s/{{PURCHASER_UAMI_NAME}}/${{ steps.deploy.outputs.purchaserUamiName }}/g" \
-              -e "s/{{SUPPLIER_UAMI_NAME}}/${{ steps.deploy.outputs.supplierUamiName }}/g" \
-              infra/sql/create-users-roles.sql > /tmp/create-users-roles-substituted.sql
-          
-          # Execute T-SQL using sqlcmd
-          sqlcmd -S ${{ steps.deploy.outputs.sqlServerFqdn }} \
-                  -d ${{ steps.deploy.outputs.sqlDatabaseName }} \
-                  -G \
-                  -P "$ACCESS_TOKEN" \
-                  -i /tmp/create-users-roles-substituted.sql
-          
-          echo "✅ SQL contained users and custom roles created"
-        shell: bash
-
+          $ErrorActionPreference = 'Stop'
+          $server = '${{ steps.deploy.outputs.sqlServerFqdn }}'
+          $serverName = $server.Split('.')[0]
+          $db = '${{ steps.deploy.outputs.sqlDatabaseName }}'
+          $rg = 'rg-edi-shared'
+          $ruleName = "gh-runner-$env:GITHUB_RUN_ID"
+          $ip = (Invoke-RestMethod -Uri 'https://api.ipify.org')
+          Write-Host "Adding temporary SQL firewall rule $ruleName for $ip"
+          az sql server firewall-rule create -g $rg -s $serverName -n $ruleName --start-ip-address $ip --end-ip-address $ip --only-show-errors | Out-Null
+          try {
+            if (-not (Get-Module -ListAvailable SqlServer)) { Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber }
+            Import-Module SqlServer
+            $token = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+            $subst = (Get-Content infra/sql/create-users-roles.sql -Raw) `
+              -replace '\{\{PURCHASER_UAMI_NAME\}\}', '${{ steps.deploy.outputs.purchaserUamiName }}' `
+              -replace '\{\{SUPPLIER_UAMI_NAME\}\}', '${{ steps.deploy.outputs.supplierUamiName }}'
+            $tmp = New-TemporaryFile
+            Set-Content -Path $tmp -Value $subst
+            Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -InputFile $tmp -ErrorAction Stop
+            Write-Host "SQL contained users and custom roles created"
+          }
+          finally {
+            Write-Host "Removing temporary SQL firewall rule $ruleName"
+            az sql server firewall-rule delete -g $rg -s $serverName -n $ruleName --only-show-errors | Out-Null
+          }
       - name: Deployment complete
         run: |
           echo "=========================================="

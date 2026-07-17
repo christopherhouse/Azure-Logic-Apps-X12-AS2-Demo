@@ -15,7 +15,7 @@
 //   Storage Queue Data Contributor:  974c5e8b-45b9-4653-ba55-5f855dd0fb88
 //   Storage Table Data Contributor:  0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3
 //   Key Vault Secrets User:          4633458b-17de-408a-b874-0445c86b69e6
-//   Key Vault Certificate User:      db79e9a7-68d1-49b9-a4b5-11d1b83f8b93
+//   Key Vault Certificate User:      db79e9a7-68ee-4b58-9aeb-b90e7c24fcba
 //   Service Bus Data Sender:         69a216fc-b8fb-44d8-bc22-1f3c2cd27a39
 //   Service Bus Data Receiver:       4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0
 
@@ -60,7 +60,7 @@ var storageAccountContributor = '17d1049b-9a84-46fb-8f53-869881c3d3ab'
 var storageQueueDataContributor = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var storageTableDataContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
-var keyVaultCertificateUser = 'db79e9a7-68d1-49b9-a4b5-11d1b83f8b93'
+var keyVaultCertificateUser = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'
 var serviceBusDataSender = '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39'
 var serviceBusDataReceiver = '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'
 
