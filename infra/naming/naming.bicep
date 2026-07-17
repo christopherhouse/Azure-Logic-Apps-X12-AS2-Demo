@@ -28,12 +28,12 @@ output serviceBusNamespace string = 'sb-${namingToken}-edi-${environmentName}-${
 output purchaserUami string = 'id-${namingToken}-purchaser-${environmentName}'
 output purchaserPlan string = 'asp-${namingToken}-purchaser-${environmentName}'
 output purchaserLogicApp string = 'logic-${namingToken}-purchaser-${environmentName}'
-output purchaserStorage string = toLower(replace('st${namingToken}purchaser${environmentName}${uniqueSuffix}', '-', '')) // storage: lowercase, no hyphens, ≤24
+output purchaserStorage string = take(toLower(replace('st${namingToken}purchaser${environmentName}${uniqueSuffix}', '-', '')), 24) // storage: lowercase, no hyphens, ≤24
 output purchaserIntegrationAccount string = 'ia-${namingToken}-purchaser-${environmentName}'
 
 // Supplier resources (rg-edi-supplier)
 output supplierUami string = 'id-${namingToken}-supplier-${environmentName}'
 output supplierPlan string = 'asp-${namingToken}-supplier-${environmentName}'
 output supplierLogicApp string = 'logic-${namingToken}-supplier-${environmentName}'
-output supplierStorage string = toLower(replace('st${namingToken}supplier${environmentName}${uniqueSuffix}', '-', '')) // storage: lowercase, no hyphens, ≤24
+output supplierStorage string = take(toLower(replace('st${namingToken}supplier${environmentName}${uniqueSuffix}', '-', '')), 24) // storage: lowercase, no hyphens, ≤24
 output supplierIntegrationAccount string = 'ia-${namingToken}-supplier-${environmentName}'
