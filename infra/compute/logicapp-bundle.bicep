@@ -55,6 +55,28 @@ param sqlServerFqdn string
 @description('SQL Database name (for built-in connector)')
 param sqlDatabaseName string
 
+// --- EDI / telemetry configuration (design §7) ---------------------------------
+@description('''Key Vault vault URI (e.g. https://kv-name.vault.azure.net/). Used to build
+@Microsoft.KeyVault(...) references for the EDI secrets. Only needed for the app that carries the
+EDI send agreements (purchaser).''')
+param keyVaultUri string = ''
+
+@description('''Key Vault secret NAME holding this app''s Integration Account callback URL (SAS =
+secret), referenced by WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL. Empty => the app is not linked to an
+IA and the setting is omitted (supplier is HTTP-only this epic). CI publishes the secret post-deploy
+and restarts the app (design §5.1, §8-F).''')
+param integrationAccountCallbackSecretName string = ''
+
+@description('''Key Vault secret NAME holding the supplier AS2 endpoint (callback) URL, referenced by
+SupplierAs2Endpoint__url. Empty => omit (purchaser-only, injected supplier-first by CI — design §6/§8).''')
+param supplierEndpointSecretName string = ''
+
+@description('X12 SEND agreement name, surfaced as app setting X12AgreementName and read by the workflow via @appsetting(...) (design §5.4). Empty => omit.')
+param x12AgreementName string = ''
+
+@description('Enable Workflows-runtime OpenTelemetry export via AzureFunctionsJobHost__telemetryMode=OpenTelemetry (design §7). host.json carries the AI v2 version switch.')
+param enableOpenTelemetry bool = true
+
 // Retained as an output for reference. The content share now uses an inline connection string
 // (listKeys) because the Windows WS1 hosting model requires it at site-create time.
 var contentShareSecretName = 'contentshare-${storageName}'
@@ -104,6 +126,124 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
 }
 
 // ============================================================================
+// APP SETTINGS COMPOSITION (#16 + EDI/telemetry design §7)
+// Base settings apply to every app; telemetry + EDI settings are appended
+// conditionally so the same bundle serves both the purchaser (EDI send) and the
+// supplier (HTTP-only, no IA link this epic).
+// ============================================================================
+var baseAppSettings = [
+  // --- Runtime identity ---
+  {
+    name: 'APP_KIND'
+    value: 'workflowApp'
+  }
+  {
+    name: 'FUNCTIONS_EXTENSION_VERSION'
+    value: '~4'
+  }
+  {
+    name: 'FUNCTIONS_WORKER_RUNTIME'
+    value: 'dotnet'
+  }
+  {
+    name: 'WEBSITE_NODE_DEFAULT_VERSION'
+    value: nodeDefaultVersion
+  }
+  // --- Observability ---
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: appInsightsConnectionString
+  }
+  // --- Host storage via managed identity (no connection string) ---
+  {
+    name: 'AzureWebJobsStorage__accountName'
+    value: storage.name
+  }
+  {
+    name: 'AzureWebJobsStorage__credential'
+    value: 'managedidentity'
+  }
+  {
+    name: 'AzureWebJobsStorage__clientId'
+    value: uamiClientId
+  }
+  // --- Content share (Azure Files) — sanctioned key exception (spec permits the Azure Files
+  // connection string for the Windows hosting model). Must be a REAL connection string at
+  // site-create time; a Key Vault reference fails ARM preflight (CouldNotAccessStorageAccount).
+  // The storage key stays out of source — resolved at deploy time via listKeys().
+  {
+    name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+    value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
+  }
+  {
+    name: 'WEBSITE_CONTENTSHARE'
+    value: contentShareName
+  }
+  // --- Service Bus built-in connector (connection-prefix model) ---
+  {
+    name: 'serviceBus__fullyQualifiedNamespace'
+    value: serviceBusFullyQualifiedNamespace
+  }
+  {
+    name: 'serviceBus__credential'
+    value: 'managedidentity'
+  }
+  {
+    name: 'serviceBus__clientId'
+    value: uamiClientId
+  }
+  // --- SQL built-in connector (managed identity) ---
+  {
+    name: 'sql__serverFqdn'
+    value: sqlServerFqdn
+  }
+  {
+    name: 'sql__databaseName'
+    value: sqlDatabaseName
+  }
+  {
+    name: 'sql__clientId'
+    value: uamiClientId
+  }
+]
+
+// v2 telemetry host-level OTel export (both apps). The AI telemetry VERSION switch
+// (Runtime.ApplicationInsightTelemetryVersion=v2) lives in host.json (source-controlled).
+var telemetryAppSettings = enableOpenTelemetry ? [
+  {
+    name: 'AzureFunctionsJobHost__telemetryMode'
+    value: 'OpenTelemetry'
+  }
+] : []
+
+// Links the app to its Integration Account (purchaser only). SAS callback URL is a secret →
+// Key Vault reference resolved via keyVaultReferenceIdentity (design §5.1, §8-F).
+var iaLinkAppSettings = empty(integrationAccountCallbackSecretName) ? [] : [
+  {
+    name: 'WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL'
+    value: '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/${integrationAccountCallbackSecretName})'
+  }
+]
+
+// Outbound AS2 POST target (purchaser only) — supplier callback URL injected supplier-first by CI (design §6).
+var supplierEndpointAppSettings = empty(supplierEndpointSecretName) ? [] : [
+  {
+    name: 'SupplierAs2Endpoint__url'
+    value: '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/${supplierEndpointSecretName})'
+  }
+]
+
+// X12 Encode agreement name (purchaser only), read by the workflow via @appsetting('X12AgreementName') (design §5.4).
+var x12AgreementAppSettings = empty(x12AgreementName) ? [] : [
+  {
+    name: 'X12AgreementName'
+    value: x12AgreementName
+  }
+]
+
+var allAppSettings = concat(baseAppSettings, telemetryAppSettings, iaLinkAppSettings, supplierEndpointAppSettings, x12AgreementAppSettings)
+
+// ============================================================================
 // LOGIC APP STANDARD (empty) — app settings authored inline (#16)
 // ============================================================================
 resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
@@ -126,81 +266,7 @@ resource logicApp 'Microsoft.Web/sites@2023-12-01' = {
       alwaysOn: true
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: [
-        // --- Runtime identity ---
-        {
-          name: 'APP_KIND'
-          value: 'workflowApp'
-        }
-        {
-          name: 'FUNCTIONS_EXTENSION_VERSION'
-          value: '~4'
-        }
-        {
-          name: 'FUNCTIONS_WORKER_RUNTIME'
-          value: 'dotnet'
-        }
-        {
-          name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: nodeDefaultVersion
-        }
-        // --- Observability ---
-        {
-          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: appInsightsConnectionString
-        }
-        // --- Host storage via managed identity (no connection string) ---
-        {
-          name: 'AzureWebJobsStorage__accountName'
-          value: storage.name
-        }
-        {
-          name: 'AzureWebJobsStorage__credential'
-          value: 'managedidentity'
-        }
-        {
-          name: 'AzureWebJobsStorage__clientId'
-          value: uamiClientId
-        }
-        // --- Content share (Azure Files) — sanctioned key exception (spec permits the Azure Files
-        // connection string for the Windows hosting model). Must be a REAL connection string at
-        // site-create time; a Key Vault reference fails ARM preflight (CouldNotAccessStorageAccount).
-        // The storage key stays out of source — resolved at deploy time via listKeys().
-        {
-          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
-        }
-        {
-          name: 'WEBSITE_CONTENTSHARE'
-          value: contentShareName
-        }
-        // --- Service Bus built-in connector (connection-prefix model) ---
-        {
-          name: 'serviceBus__fullyQualifiedNamespace'
-          value: serviceBusFullyQualifiedNamespace
-        }
-        {
-          name: 'serviceBus__credential'
-          value: 'managedidentity'
-        }
-        {
-          name: 'serviceBus__clientId'
-          value: uamiClientId
-        }
-        // --- SQL built-in connector (managed identity) ---
-        {
-          name: 'sql__serverFqdn'
-          value: sqlServerFqdn
-        }
-        {
-          name: 'sql__databaseName'
-          value: sqlDatabaseName
-        }
-        {
-          name: 'sql__clientId'
-          value: uamiClientId
-        }
-      ]
+      appSettings: allAppSettings
     }
   }
 }
@@ -231,3 +297,5 @@ output integrationAccountId string = integrationAccount.id
 output integrationAccountName string = integrationAccount.name
 // Secret name CI must publish (Azure Files connection string) for the content share.
 output contentShareSecretName string = contentShareSecretName
+// EDI linkage secret name this app expects (empty for non-EDI apps like the supplier this epic).
+output integrationAccountCallbackSecretName string = integrationAccountCallbackSecretName

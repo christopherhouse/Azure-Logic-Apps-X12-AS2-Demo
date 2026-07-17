@@ -31,6 +31,13 @@ param purchaserLocation string = 'eastus2'
 @description('Enable Key Vault purge protection (default: false for dev/test; set true for production)')
 param enablePurgeProtection bool = false
 
+@description('''Object ID of the first-party Azure Logic Apps service principal in this tenant
+(well-known app ID 7cd684f4-8a78-49b0-91ec-6a35d38739ba). Used to grant Key Vault Crypto User +
+Secrets User so the Integration Account can read the Key Vault key backing private AS2 certificates
+(design §5.5). Resolve at deploy time: `az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba
+--query id -o tsv`. Empty by default — the grant is skipped until AS2 private certs are configured.''')
+param logicAppsServicePrincipalObjectId string = ''
+
 // ============================================================================
 // VARIABLES
 // ============================================================================
@@ -46,6 +53,18 @@ var commonTags = {
 var rgShared = 'rg-edi-shared'
 var rgSupplier = 'rg-edi-supplier'
 var rgPurchaser = 'rg-edi-purchaser'
+
+// ============================================================================
+// EDI EPIC NAMING (design §5.1, §5.4, §6, §8) — deterministic secret / agreement names
+// ============================================================================
+// Key Vault secret holding the purchaser Integration Account callback URL (SAS = secret).
+// CI reads listCallbackUrl post-deploy, writes this secret, then restarts the purchaser app.
+var purchaserIaCallbackSecretName = 'purchaser-ia-callback-url'
+// Key Vault secret holding the supplier AS2 endpoint (callback) URL — injected supplier-first by CI (§6).
+var supplierAs2EndpointSecretName = 'supplier-as2-endpoint-url'
+// X12 SEND agreement name — MUST match the agreement created by infra/integration-account/ia-content.bicep
+// and the value the workflow reads via @appsetting('X12AgreementName') (design §5.4 / Simon README §2.1).
+var x12AgreementName = 'Purchaser-Supplier-X12'
 
 // ============================================================================
 // MODULE: NAMING PRIMITIVES (#2)
@@ -209,12 +228,19 @@ module purchaserCompute 'compute/logicapp-bundle.bicep' = {
     serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
     sqlServerFqdn: sqlServer.outputs.serverFqdn
     sqlDatabaseName: sqlServer.outputs.databaseName
+    // EDI send agreements live on the PURCHASER IA — wire the KV-referenced EDI app settings (design §7).
+    keyVaultUri: keyVault.outputs.uri
+    integrationAccountCallbackSecretName: purchaserIaCallbackSecretName
+    supplierEndpointSecretName: supplierAs2EndpointSecretName
+    x12AgreementName: x12AgreementName
+    enableOpenTelemetry: true
   }
 }
 
 // ============================================================================
 // SUPPLIER COMPUTE BUNDLE (#14/#12, app settings #16) — rg-edi-supplier (Central US)
 // WS1 plan + empty Logic App Standard + storage + Free Integration Account, supplier UAMI attached.
+// Supplier is HTTP-only this epic (no EDI send agreements) — EDI app settings intentionally omitted.
 // ============================================================================
 module supplierCompute 'compute/logicapp-bundle.bicep' = {
   name: 'deploy-supplier-compute'
@@ -250,6 +276,7 @@ module rbac 'rbac/role-assignments.bicep' = {
     rgPurchaser: rgPurchaser
     rgSupplier: rgSupplier
     rgShared: rgShared
+    logicAppsServicePrincipalObjectId: logicAppsServicePrincipalObjectId
   }
 }
 
@@ -303,3 +330,11 @@ output supplierIntegrationAccountId string = supplierCompute.outputs.integration
 output supplierStorageId string = supplierCompute.outputs.storageId
 output supplierStorageName string = supplierCompute.outputs.storageName
 output supplierContentShareSecretName string = supplierCompute.outputs.contentShareSecretName
+
+// EDI epic (design §5/§6/§8): names CI needs for the post-deploy IA-content, callback-URL, and
+// supplier-URL-injection steps.
+output purchaserIntegrationAccountName string = names.outputs.purchaserIntegrationAccount
+output purchaserIaCallbackSecretName string = purchaserIaCallbackSecretName
+output supplierAs2EndpointSecretName string = supplierAs2EndpointSecretName
+output x12AgreementName string = x12AgreementName
+output supplierInboundAckWorkflowName string = 'supplier-inbound-ack'

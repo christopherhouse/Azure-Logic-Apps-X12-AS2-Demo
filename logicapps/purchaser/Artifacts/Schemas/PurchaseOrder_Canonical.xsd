@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PurchaseOrder_Canonical.xsd
+  =============================================================================
+  Authoritative source: docs/purchaser-workflow-epic-design.md §2.1, §4.3
+
+  Describes the intermediate XML produced by the workflow's xml(json(...))
+  expression (step 5a) from the canonical Purchase Order JSON (§2.1). This
+  schema governs the input consumed by the built-in Transform XML action, whose
+  map (PO_Canonical_to_X12_850_006030.xslt) transforms it into X12 850 XML.
+
+  NAMESPACE: intentionally NONE. The Logic Apps xml(json(...)) expression emits
+  elements in no target namespace, named exactly after the JSON property keys.
+  Keeping this schema namespace-free is what lets xml() output validate against
+  it and lets the XSLT match elements with unprefixed XPath.
+
+  ARRAY SHAPE: xml(json(...)) renders a JSON array by REPEATING the array's
+  property-name element once per item. So JSON "lines": [ {..}, {..} ] becomes
+  a sequence of sibling <lines> elements (NOT a <lines> wrapper containing
+  <line> children). The schema models `lines` with maxOccurs="unbounded"
+  accordingly.
+
+  NULLABLE/OPTIONAL: fields that may be null or absent in the JSON
+  (requestedDeliveryDate, address line2, line description) are minOccurs="0"
+  and nillable="true" so an xml()-emitted empty/nil element still validates.
+  =============================================================================
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified"
+           attributeFormDefault="unqualified">
+
+  <!-- ===================== reusable complex types ===================== -->
+
+  <xs:complexType name="PartyType">
+    <xs:sequence>
+      <xs:element name="id"   type="xs:string"/>
+      <xs:element name="name" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="name"       type="xs:string"/>
+      <xs:element name="line1"      type="xs:string"/>
+      <xs:element name="line2"      type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="city"       type="xs:string"/>
+      <xs:element name="state"      type="xs:string"/>
+      <xs:element name="postalCode" type="xs:string"/>
+      <xs:element name="country"    type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="LineType">
+    <xs:sequence>
+      <xs:element name="lineNumber"  type="xs:integer"/>
+      <xs:element name="sku"         type="xs:string"/>
+      <xs:element name="description" type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="quantity"    type="xs:decimal"/>
+      <xs:element name="uom"         type="xs:string"/>
+      <xs:element name="unitPrice"   type="xs:decimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ===================== root element ===================== -->
+  <!-- xml(json('{"purchaseOrder":{...}}')) => <purchaseOrder> ... </purchaseOrder> -->
+
+  <xs:element name="purchaseOrder">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="poNumber"              type="xs:string"/>
+        <xs:element name="orderDate"             type="xs:string"/>
+        <xs:element name="requestedDeliveryDate" type="xs:string" minOccurs="0" nillable="true"/>
+        <xs:element name="currency"              type="xs:string"/>
+        <xs:element name="buyer"  type="PartyType"/>
+        <xs:element name="seller" type="PartyType"/>
+        <xs:element name="shipTo" type="AddressType"/>
+        <xs:element name="billTo" type="AddressType"/>
+        <!-- one <lines> element per PO line (repeated array-item shape) -->
+        <xs:element name="lines" type="LineType" minOccurs="1" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

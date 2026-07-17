@@ -1,0 +1,30 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Http",
+        "description": "SAS-signed HTTP trigger. CI extracts this trigger's callback URL (design 6) and injects it into the purchaser app setting SupplierAs2Endpoint__url as a Key Vault reference. Trigger name is 'manual' so the listCallbackUrl path matches design 6.",
+        "inputs": {
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Return_200_OK": {
+        "type": "Response",
+        "kind": "Http",
+        "description": "Minimal inbound acknowledgment. Returns 200 OK so the purchaser's outbound AS2 POST succeeds. MDN generation / AS2 Decode is deferred to a later epic (design 1, 6).",
+        "runAfter": {},
+        "inputs": {
+          "statusCode": 200,
+          "body": "AS2 message received."
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

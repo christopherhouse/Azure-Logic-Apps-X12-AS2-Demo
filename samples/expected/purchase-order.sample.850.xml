@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<x12:X12_00603_850 xmlns:x12="http://schemas.microsoft.com/BizTalk/EDI/X12/2006">
+  <ST>
+    <ST01>850</ST01>
+    <ST02>0001</ST02>
+  </ST>
+  <x12:BEG>
+    <BEG01>00</BEG01>
+    <BEG02>NE</BEG02>
+    <BEG03>PO-2026-0001</BEG03>
+    <BEG05>20260717</BEG05>
+  </x12:BEG>
+  <x12:REF>
+    <REF01>CO</REF01>
+    <REF02>PURCHASER01</REF02>
+  </x12:REF>
+  <x12:DTM>
+    <DTM01>002</DTM01>
+    <DTM02>20260731</DTM02>
+  </x12:DTM>
+  <x12:N1Loop1>
+    <x12:N1>
+      <N101>ST</N101>
+      <N102>Contoso DC West</N102>
+    </x12:N1>
+    <x12:N3>
+      <N301>100 Warehouse Way</N301>
+    </x12:N3>
+    <x12:N4>
+      <N401>Tacoma</N401>
+      <N402>WA</N402>
+      <N403>98402</N403>
+      <N404>US</N404>
+    </x12:N4>
+  </x12:N1Loop1>
+  <x12:N1Loop1>
+    <x12:N1>
+      <N101>BT</N101>
+      <N102>Contoso Accounts Payable</N102>
+    </x12:N1>
+    <x12:N3>
+      <N301>1 Contoso Plaza</N301>
+      <N302>Suite 400</N302>
+    </x12:N3>
+    <x12:N4>
+      <N401>Redmond</N401>
+      <N402>WA</N402>
+      <N403>98052</N403>
+      <N404>US</N404>
+    </x12:N4>
+  </x12:N1Loop1>
+  <x12:PO1Loop1>
+    <x12:PO1>
+      <PO101>1</PO101>
+      <PO102>120</PO102>
+      <PO103>EA</PO103>
+      <PO104>2.5</PO104>
+      <PO106>BP</PO106>
+      <PO107>SKU-1001</PO107>
+    </x12:PO1>
+    <x12:PIDLoop1>
+      <x12:PID_2>
+        <PID01>F</PID01>
+        <PID05>Widget, 10mm</PID05>
+      </x12:PID_2>
+    </x12:PIDLoop1>
+  </x12:PO1Loop1>
+  <x12:PO1Loop1>
+    <x12:PO1>
+      <PO101>2</PO101>
+      <PO102>40</PO102>
+      <PO103>EA</PO103>
+      <PO104>9.99</PO104>
+      <PO106>BP</PO106>
+      <PO107>SKU-2002</PO107>
+    </x12:PO1>
+    <x12:PIDLoop1>
+      <x12:PID_2>
+        <PID01>F</PID01>
+        <PID05>Gadget, blue</PID05>
+      </x12:PID_2>
+    </x12:PIDLoop1>
+  </x12:PO1Loop1>
+  <x12:PO1Loop1>
+    <x12:PO1>
+      <PO101>3</PO101>
+      <PO102>500</PO102>
+      <PO103>EA</PO103>
+      <PO104>0.75</PO104>
+      <PO106>BP</PO106>
+      <PO107>SKU-3003</PO107>
+    </x12:PO1>
+    <x12:PIDLoop1>
+      <x12:PID_2>
+        <PID01>F</PID01>
+        <PID05>Bracket, steel</PID05>
+      </x12:PID_2>
+    </x12:PIDLoop1>
+  </x12:PO1Loop1>
+  <x12:CTTLoop1>
+    <x12:CTT>
+      <CTT01>3</CTT01>
+      <CTT02>660</CTT02>
+    </x12:CTT>
+  </x12:CTTLoop1>
+  <SE>
+    <SE01>1</SE01>
+    <SE02>0001</SE02>
+  </SE>
+</x12:X12_00603_850>

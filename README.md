@@ -21,6 +21,16 @@ This repository provisions and configures a **production-ready Azure Logic Apps 
 - Workflow implementations, X12 schemas, maps, AS2 agreements, and trading-partner configurations are **DEFERRED to a future specification** (per the Infrastructure v1.0 PRD).
 - The infrastructure deploys **empty Logic Apps and empty Integration Accounts**. This v1.0 deliverable establishes the foundational environment; the EDI flows will be added in subsequent work.
 
+> **📦 Update — Purchaser Workflow Epic (branch `feature/purchaser-po-to-as2-850-workflow`).**
+> The application layer above is **no longer deferred on this branch.** The purchaser workflow, the
+> supplier acknowledgment endpoint, the X12 850 (006030) schema + map, the normalized SQL model, the
+> trading partners, and the AS2 + X12 **send** agreements are now **built**. The sections describing
+> "empty Logic Apps" and "deferred EDI" reflect the infrastructure v1.0 baseline; see
+> [**Purchaser Workflow Epic**](#purchaser-workflow-epic) below,
+> [`docs/purchaser-workflow-runbook.md`](docs/purchaser-workflow-runbook.md), and
+> [`docs/trading-partner-onboarding.md`](docs/trading-partner-onboarding.md) for what this branch adds.
+> **This epic is not merged** (owner directive).
+
 ---
 
 ## Architecture Summary
@@ -44,6 +54,102 @@ For the detailed resource-dependency DAG and deploy ordering, see [`docs/infra-d
 
 ---
 
+## Purchaser Workflow Epic
+
+> **Branch:** `feature/purchaser-po-to-as2-850-workflow` · **Not merged** (owner directive).
+> **Authoritative design (the contract):** [`docs/purchaser-workflow-epic-design.md`](docs/purchaser-workflow-epic-design.md).
+> **Runbook:** [`docs/purchaser-workflow-runbook.md`](docs/purchaser-workflow-runbook.md).
+
+This branch builds the application layer on top of the infrastructure baseline: a purchaser workflow
+that turns a canonical Purchase Order on Service Bus into a signed + encrypted **X12 850 (version
+006030)** AS2 transmission to the supplier, plus a minimal supplier acknowledgment endpoint.
+
+### End-to-end flow
+
+```mermaid
+flowchart LR
+    SB[("Service Bus topic<br/>purchase-orders.received<br/>sub all-messages")] -->|peek-lock| PUR
+    subgraph PUR["Purchaser workflow (purchaser-po-to-as2)"]
+        direction TB
+        P1["Parse + validate JSON"] --> P2["SQL upsert<br/>usp_UpsertPurchaseOrder"]
+        P2 --> P3["JSON → canonical XML"] --> P4["Transform XSLT → X12 850 XML"]
+        P4 --> P5["X12 Encode (006030)"] --> P6["AS2 Encode (sign + encrypt)"]
+        P6 --> P7["HTTP POST"]
+    end
+    P7 --> SUP["Supplier workflow<br/>(supplier-inbound-ack)<br/>HTTP 200 OK"]
+    PUR -->|success| DONE["Complete SB message"]
+    PUR -.->|any failure| DL["Dead-letter SB message<br/>(reason)"]
+```
+
+1. **Trigger** — Service Bus peek-lock on topic `purchase-orders.received` / subscription `all-messages`; `splitOn` debatches to one run per message.
+2. **Parse + validate** — Parse JSON against the canonical PO schema; an invalid payload fails the run → dead-letter.
+3. **Persist** — `EXEC dbo.usp_UpsertPurchaseOrder` (built-in SQL, managed identity); line items passed as a JSON string and shredded server-side with `OPENJSON`; idempotent on `PoNumber`.
+4. **Transform** — `@xml(json(...))` → canonical XML → **Transform XML** (`PO_Canonical_to_X12_850_006030.xslt`) → X12 850 XML.
+5. **Encode** — **X12 Encode** (send agreement `Purchaser-Supplier-X12`) → 006030 interchange, then **AS2 Encode** (sign + encrypt, sync MDN requested but non-fatal).
+6. **Send** — HTTP POST the AS2 payload to the supplier callback URL (`SupplierAs2Endpoint__url`, a Key Vault reference injected by CI).
+7. **Settle** — **complete** the Service Bus message on full success; **dead-letter** (with a reason) on any failure. MDN presence does not gate settlement.
+
+The **supplier** workflow (`supplier-inbound-ack`) is an HTTP-triggered stub that returns `200 OK`
+(`"AS2 message received."`); MDN generation and inbound processing are deferred.
+
+### Canonical Purchase Order — message contract
+
+The workflow's input is a **canonical PO JSON** validated against a draft-2020-12 JSON Schema (design
+§2, embedded in the workflow's Parse action and mirrored at `samples/purchase-order.schema.json`). Shape:
+
+```json
+{
+  "purchaseOrder": {
+    "poNumber": "PO-2026-0001",
+    "orderDate": "2026-07-17",
+    "requestedDeliveryDate": "2026-07-31",
+    "currency": "USD",
+    "buyer":  { "id": "PURCHASER01", "name": "Contoso Buying Co" },
+    "seller": { "id": "SUPPLIER01",  "name": "Fabrikam Supply Co" },
+    "shipTo": { "name": "...", "line1": "...", "line2": null, "city": "...", "state": "WA", "postalCode": "98402", "country": "US" },
+    "billTo": { "name": "...", "line1": "...", "line2": "...", "city": "...", "state": "WA", "postalCode": "98052", "country": "US" },
+    "lines": [
+      { "lineNumber": 1, "sku": "SKU-1001", "description": "Widget, 10mm", "quantity": 120, "uom": "EA", "unitPrice": 2.50 }
+    ]
+  }
+}
+```
+
+Field-length caps are chosen to fit their downstream X12 850 element limits, so a payload that passes
+validation cannot overflow an 850 element. See design §2 for the full schema and §4 for the 850 mapping.
+
+### What the epic added
+
+| Component | Location |
+|-----------|----------|
+| Purchaser workflow | `logicapps/purchaser/workflows/purchaser-po-to-as2/workflow.json` |
+| Supplier workflow | `logicapps/supplier/workflows/supplier-inbound-ack/workflow.json` |
+| X12 850 (006030) schema (~2.15 MB, root `X12_00603_850`) | `infra/integration-account/schemas/X12_00603_850.xsd` |
+| Canonical PO schema | `logicapps/purchaser/Artifacts/Schemas/PurchaseOrder_Canonical.xsd` |
+| PO → 850 XSLT map | `logicapps/purchaser/Artifacts/Maps/PO_Canonical_to_X12_850_006030.xslt` |
+| SQL model + upsert proc | `infra/sql/schema/010-tables.sql`, `020-usp-upsert.sql` |
+| IA content (partners, AS2 + X12 send agreements, cert artifacts) | `infra/integration-account/ia-content.bicep` |
+| Samples + offline test harnesses | `samples/` |
+
+### Try it
+
+- **Offline** (no Azure) — validate the JSON gate and the transform pipeline against the repo artifacts:
+  ```powershell
+  python samples/validate-json.py            # JSON-schema gate (valid passes, invalid fails)
+  pwsh -File samples/transform-and-validate.ps1   # canonical XSD → XSLT → official 006030 XSD
+  ```
+- **Deployed** — drop `samples/purchase-order.sample.json` on the topic and observe the 850 AS2 send and
+  the supplier `200 OK`. See the [runbook](docs/purchaser-workflow-runbook.md) §7 for the full procedure.
+
+For the sample fixtures and test catalog, see [`samples/README.md`](samples/README.md).
+
+**Known limitations / open risks (epic):** MDN generation is deferred (supplier just returns 200);
+send-only agreements; AS2 certificates are an out-of-band prerequisite (**R1**); CI must resolve and
+grant the Logic Apps first-party service principal Key Vault cert-read RBAC for the private signing cert
+(**R2**). Details in the [runbook](docs/purchaser-workflow-runbook.md) §8–§9.
+
+---
+
 ## Repository Structure
 
 ```
@@ -57,24 +163,29 @@ For the detailed resource-dependency DAG and deploy ordering, see [`docs/infra-d
 │   ├── diagnostics/        # Diagnostic settings helpers
 │   ├── shared/             # Shared-tier modules (LAW, App Insights, Key Vault, SQL, Service Bus)
 │   ├── compute/            # Compute bundles (Logic App + plan + storage + Integration Account)
-│   ├── rbac/               # RBAC role assignments
-│   ├── sql/                # T-SQL scripts for SQL contained users + custom roles
+│   ├── rbac/               # RBAC role assignments (incl. Logic Apps first-party SP KV grants)
+│   ├── sql/                # T-SQL: contained users + roles, and schema/ DDL + upsert proc (epic)
+│   ├── integration-account/# IA content (partners, agreements, cert artifacts) + X12 850 schema (epic)
 │   └── scripts/            # Out-of-band operational scripts (cert generation)
 ├── logicapps/
 │   ├── purchaser/          # Purchaser Logic App Standard artifacts
-│   │   ├── host.json
+│   │   ├── host.json           # v2 workflow telemetry switch
 │   │   ├── connections.json    # Built-in Service Bus + SQL connectors (managed identity)
 │   │   ├── parameters.json     # Empty parameters file
-│   │   └── workflows/          # (empty — future EDI workflows)
+│   │   ├── Artifacts/          # Canonical PO schema + PO→850 XSLT map (epic)
+│   │   └── workflows/          # purchaser-po-to-as2/workflow.json (epic)
 │   └── supplier/           # Supplier Logic App Standard artifacts
 │       ├── host.json
 │       ├── connections.json
 │       ├── parameters.json
-│       └── workflows/
+│       └── workflows/          # supplier-inbound-ack/workflow.json (epic)
+├── samples/                # Sample POs, expected 850 XML, JSON schema, offline test harnesses (epic)
 ├── docs/                   # Documentation
 │   ├── deployment-guide.md                                         # Complete deployment runbook
 │   ├── infra-deploy-ordering.md                                    # Architectural deploy ordering (Mal's contract)
-│   ├── trading-partner-onboarding.md                               # Placeholder for future trading-partner config
+│   ├── purchaser-workflow-epic-design.md                           # Application-layer design (contract, epic)
+│   ├── purchaser-workflow-runbook.md                               # Epic runbook (deploy ordering, demo, risks)
+│   ├── trading-partner-onboarding.md                               # Concrete partner + agreement config (epic)
 │   └── Azure-Logic-Apps-EDI-Infrastructure-Engineering-Spec.md     # Infrastructure v1.0 PRD
 └── README.md               # This file
 ```
@@ -260,8 +371,10 @@ For the complete rationale, see [`docs/infra-deploy-ordering.md`](docs/infra-dep
 ## Documentation
 
 - **[Deployment Guide](docs/deployment-guide.md)** — step-by-step manual deployment instructions (OIDC setup, deploy, certs, verification)
+- **[Purchaser Workflow Epic — Design](docs/purchaser-workflow-epic-design.md)** — the authoritative application-layer design (contract) for the PO → X12 850 AS2 flow
+- **[Purchaser Workflow Runbook](docs/purchaser-workflow-runbook.md)** — epic deploy ordering, cert prerequisite, how to run the demo, known limitations and risks
 - **[Infrastructure Deploy Ordering](docs/infra-deploy-ordering.md)** — architectural design artifact: resource-dependency DAG, trust boundaries, out-of-band operations
-- **[Trading Partner Onboarding](docs/trading-partner-onboarding.md)** — placeholder for future EDI configuration (AS2 identifiers, certificates, agreements, maps)
+- **[Trading Partner Onboarding](docs/trading-partner-onboarding.md)** — concrete Purchaser/Supplier partners + AS2/X12 006030 send agreement settings
 - **[Infrastructure Engineering Spec](docs/Azure-Logic-Apps-EDI-Infrastructure-Engineering-Spec.md)** — Infrastructure v1.0 PRD (read-only)
 
 ---

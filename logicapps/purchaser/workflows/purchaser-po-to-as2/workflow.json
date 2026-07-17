@@ -1,0 +1,263 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_purchase_order_message_is_received": {
+        "type": "ServiceProvider",
+        "description": "Peek-lock trigger on Service Bus topic 'purchase-orders.received' / subscription 'all-messages'. splitOn debatches to one workflow run per message so settlement is explicit (complete on success, dead-letter on failure).",
+        "inputs": {
+          "parameters": {
+            "topicName": "purchase-orders.received",
+            "subscriptionName": "all-messages",
+            "isSessionsEnabled": false
+          },
+          "serviceProviderConfiguration": {
+            "connectionName": "serviceBus",
+            "operationId": "peekLockTopicMessages",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        },
+        "splitOn": "@triggerOutputs()?['body']"
+      }
+    },
+    "actions": {
+      "Process_Purchase_Order": {
+        "type": "Scope",
+        "description": "All business logic runs inside this scope. Any failure here (schema-invalid payload, SQL error, transform/encode/AS2 error, transport error) routes to the dead-letter handler. Only full success completes the message.",
+        "runAfter": {},
+        "actions": {
+          "Parse_Purchase_Order": {
+            "type": "ParseJson",
+            "description": "Parse + validate the canonical PO against the JSON Schema (design 2.2). A schema/parse failure fails this action -> the scope fails -> dead-letter path.",
+            "inputs": {
+              "content": "@triggerBody()?['contentData']",
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://edi-demo/schemas/purchase-order.schema.json",
+                "type": "object",
+                "required": ["purchaseOrder"],
+                "additionalProperties": false,
+                "properties": {
+                  "purchaseOrder": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["poNumber", "orderDate", "currency", "buyer", "seller", "shipTo", "billTo", "lines"],
+                    "properties": {
+                      "poNumber": { "type": "string", "minLength": 1, "maxLength": 22 },
+                      "orderDate": { "type": "string", "format": "date" },
+                      "requestedDeliveryDate": { "type": "string", "format": "date" },
+                      "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+                      "buyer": { "$ref": "#/$defs/party" },
+                      "seller": { "$ref": "#/$defs/party" },
+                      "shipTo": { "$ref": "#/$defs/address" },
+                      "billTo": { "$ref": "#/$defs/address" },
+                      "lines": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": { "$ref": "#/$defs/line" }
+                      }
+                    }
+                  }
+                },
+                "$defs": {
+                  "party": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "name"],
+                    "properties": {
+                      "id": { "type": "string", "minLength": 1, "maxLength": 15 },
+                      "name": { "type": "string", "minLength": 1, "maxLength": 60 }
+                    }
+                  },
+                  "address": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "line1", "city", "state", "postalCode", "country"],
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+                      "line1": { "type": "string", "minLength": 1, "maxLength": 55 },
+                      "line2": { "type": ["string", "null"], "maxLength": 55 },
+                      "city": { "type": "string", "minLength": 1, "maxLength": 30 },
+                      "state": { "type": "string", "pattern": "^[A-Z]{2}$" },
+                      "postalCode": { "type": "string", "minLength": 3, "maxLength": 15 },
+                      "country": { "type": "string", "pattern": "^[A-Z]{2}$" }
+                    }
+                  },
+                  "line": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["lineNumber", "sku", "quantity", "uom", "unitPrice"],
+                    "properties": {
+                      "lineNumber": { "type": "integer", "minimum": 1 },
+                      "sku": { "type": "string", "minLength": 1, "maxLength": 30 },
+                      "description": { "type": "string", "maxLength": 80 },
+                      "quantity": { "type": "number", "exclusiveMinimum": 0 },
+                      "uom": { "type": "string", "minLength": 1, "maxLength": 2 },
+                      "unitPrice": { "type": "number", "minimum": 0 }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "Persist_Purchase_Order": {
+            "type": "ServiceProvider",
+            "description": "Normalized persist via dbo.usp_UpsertPurchaseOrder (built-in SQL, managed identity). NOTE: the built-in SQL connector cannot pass a table-valued parameter, so line items are passed as a JSON string (LinesJson) for the proc to shred with OPENJSON. See decisions/inbox/wash-workflows.md.",
+            "runAfter": {
+              "Parse_Purchase_Order": ["SUCCEEDED"]
+            },
+            "inputs": {
+              "parameters": {
+                "storedProcedureName": "[dbo].[usp_UpsertPurchaseOrder]",
+                "storedProcedureParameters": {
+                  "PoNumber": "@body('Parse_Purchase_Order')?['purchaseOrder']?['poNumber']",
+                  "OrderDate": "@body('Parse_Purchase_Order')?['purchaseOrder']?['orderDate']",
+                  "RequestedDeliveryDate": "@body('Parse_Purchase_Order')?['purchaseOrder']?['requestedDeliveryDate']",
+                  "Currency": "@body('Parse_Purchase_Order')?['purchaseOrder']?['currency']",
+                  "BuyerId": "@body('Parse_Purchase_Order')?['purchaseOrder']?['buyer']?['id']",
+                  "BuyerName": "@body('Parse_Purchase_Order')?['purchaseOrder']?['buyer']?['name']",
+                  "SellerId": "@body('Parse_Purchase_Order')?['purchaseOrder']?['seller']?['id']",
+                  "SellerName": "@body('Parse_Purchase_Order')?['purchaseOrder']?['seller']?['name']",
+                  "ShipToName": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['name']",
+                  "ShipToLine1": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['line1']",
+                  "ShipToLine2": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['line2']",
+                  "ShipToCity": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['city']",
+                  "ShipToState": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['state']",
+                  "ShipToPostalCode": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['postalCode']",
+                  "ShipToCountry": "@body('Parse_Purchase_Order')?['purchaseOrder']?['shipTo']?['country']",
+                  "BillToName": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['name']",
+                  "BillToLine1": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['line1']",
+                  "BillToLine2": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['line2']",
+                  "BillToCity": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['city']",
+                  "BillToState": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['state']",
+                  "BillToPostalCode": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['postalCode']",
+                  "BillToCountry": "@body('Parse_Purchase_Order')?['purchaseOrder']?['billTo']?['country']",
+                  "LinesJson": "@{string(body('Parse_Purchase_Order')?['purchaseOrder']?['lines'])}"
+                }
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "sql",
+                "operationId": "executeStoredProcedure",
+                "serviceProviderId": "/serviceProviders/sql"
+              }
+            }
+          },
+          "Compose_Canonical_Xml": {
+            "type": "Compose",
+            "description": "5a. Convert canonical PO JSON -> canonical XML. The root object has a single property (purchaseOrder), which xml() requires. Output conforms to PurchaseOrder_Canonical.xsd (Simon).",
+            "runAfter": {
+              "Persist_Purchase_Order": ["SUCCEEDED"]
+            },
+            "inputs": "@xml(body('Parse_Purchase_Order'))"
+          },
+          "Transform_to_X12_850_Xml": {
+            "type": "Xslt",
+            "description": "5b. Transform canonical XML -> X12 850 XML using the project map in Artifacts/Maps (design 4.3). Built-in Transform XML reads maps from the app project, no Integration Account needed for the transform.",
+            "runAfter": {
+              "Compose_Canonical_Xml": ["SUCCEEDED"]
+            },
+            "inputs": {
+              "content": "@body('Compose_Canonical_Xml')",
+              "map": {
+                "source": "LogicApp",
+                "name": "PO_Canonical_to_X12_850_006030.xslt"
+              }
+            }
+          },
+          "Encode_to_X12_850": {
+            "type": "ServiceProvider",
+            "description": "5c. X12 Encode (built-in). Resolves the X12 send agreement from the linked Integration Account (via WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting); the agreement owns interchange/group/set control numbers. No connections.json entry is required for built-in EDI (design 5.1).",
+            "runAfter": {
+              "Transform_to_X12_850_Xml": ["SUCCEEDED"]
+            },
+            "inputs": {
+              "parameters": {
+                "messageToEncode": "@body('Transform_to_X12_850_Xml')",
+                "agreementName": "@appsetting('X12AgreementName')"
+              },
+              "serviceProviderConfiguration": {
+                "operationId": "x12Encode",
+                "serviceProviderId": "/serviceProviders/x12"
+              }
+            }
+          },
+          "Encode_to_AS2": {
+            "type": "ServiceProvider",
+            "description": "6a. AS2 Encode (built-in AS2 v2). Sign + encrypt and request a synchronous MDN per the AS2 send agreement (resolved by as2From/as2To identities from the linked Integration Account). No connections.json entry is required for built-in AS2 v2 (design 5.1).",
+            "runAfter": {
+              "Encode_to_X12_850": ["SUCCEEDED"]
+            },
+            "inputs": {
+              "parameters": {
+                "messageToEncode": "@body('Encode_to_X12_850')",
+                "as2From": "PURCHASER01",
+                "as2To": "SUPPLIER01"
+              },
+              "serviceProviderConfiguration": {
+                "operationId": "as2Encode",
+                "serviceProviderId": "/serviceProviders/as2"
+              }
+            }
+          },
+          "POST_AS2_to_supplier": {
+            "type": "Http",
+            "description": "6b. POST the signed+encrypted AS2 payload and AS2 headers to the supplier callback URL (Key Vault-referenced app setting SupplierAs2Endpoint__url). A synchronous MDN, if any, is returned in the response and recorded as a tracked property only - it does NOT gate settlement (design 1, 5.3).",
+            "runAfter": {
+              "Encode_to_AS2": ["SUCCEEDED"]
+            },
+            "inputs": {
+              "method": "POST",
+              "uri": "@appsetting('SupplierAs2Endpoint__url')",
+              "headers": "@body('Encode_to_AS2')?['as2Message']?['outboundHeaders']",
+              "body": "@body('Encode_to_AS2')?['as2Message']?['content']"
+            },
+            "trackedProperties": {
+              "poNumber": "@body('Parse_Purchase_Order')?['purchaseOrder']?['poNumber']",
+              "supplierResponseStatusCode": "@outputs('POST_AS2_to_supplier')?['statusCode']",
+              "mdnReceived": "@not(empty(body('POST_AS2_to_supplier')))"
+            }
+          }
+        }
+      },
+      "Complete_Message": {
+        "type": "ServiceProvider",
+        "description": "7. Full success -> Complete the Service Bus message (settlement). MDN presence does not gate this.",
+        "runAfter": {
+          "Process_Purchase_Order": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "parameters": {
+            "lockToken": "@triggerBody()?['lockToken']"
+          },
+          "serviceProviderConfiguration": {
+            "connectionName": "serviceBus",
+            "operationId": "completeMessage",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        }
+      },
+      "Dead_Letter_Message": {
+        "type": "ServiceProvider",
+        "description": "7. Any failure or timeout in Process_Purchase_Order -> Dead-letter the Service Bus message with a reason and the captured failure detail (design 1, 7).",
+        "runAfter": {
+          "Process_Purchase_Order": ["FAILED", "TIMEDOUT"]
+        },
+        "inputs": {
+          "parameters": {
+            "lockToken": "@triggerBody()?['lockToken']",
+            "deadLetterReason": "PurchaseOrderProcessingFailed",
+            "deadLetterErrorDescription": "@{substring(string(result('Process_Purchase_Order')), 0, min(2000, length(string(result('Process_Purchase_Order')))))}"
+          },
+          "serviceProviderConfiguration": {
+            "connectionName": "serviceBus",
+            "operationId": "deadLetterMessage",
+            "serviceProviderId": "/serviceProviders/serviceBus"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

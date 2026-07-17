@@ -47,6 +47,14 @@ jobs:
           az bicep lint --file infra/main.bicep
         shell: bash
 
+      - name: Build Integration Account content template
+        run: |
+          # ia-content.bicep is RG-scoped and CI-deployed post-main (design §8). It cannot be
+          # what-if'd standalone (needs a live IA + the supplier public cert param), so we
+          # compile it here to catch schema/shape regressions before merge.
+          az bicep build --file infra/integration-account/ia-content.bicep
+        shell: bash
+
       - name: Run what-if analysis
         run: |
           az deployment sub what-if \
