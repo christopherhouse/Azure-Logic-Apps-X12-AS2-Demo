@@ -59,12 +59,22 @@ jobs:
           # (well-known app id 7cd684f4-8a78-49b0-91ec-6a35d38739ba). Its object id in THIS
           # tenant activates Zoe's guarded IA->Key Vault grants (KV Crypto User + Secrets User),
           # which the IA needs to read the purchaser signing KEY at AS2 send time.
-          SP_OBJECT_ID=$(az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv)
+          #
+          # The OIDC deploy SP has Azure RBAC but no Microsoft Graph directory-read, so
+          # `az ad sp show` fails with "Insufficient privileges". Prefer the repo variable
+          # LOGICAPPS_FIRSTPARTY_SP_OBJECT_ID (resolved once by an admin: `az ad sp show
+          # --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv`); fall back to Graph
+          # for tenants where the deploy SP does have directory read.
+          SP_OBJECT_ID="${{ vars.LOGICAPPS_FIRSTPARTY_SP_OBJECT_ID }}"
           if [ -z "$SP_OBJECT_ID" ]; then
-            echo "::error::Could not resolve Logic Apps first-party SP object id"; exit 1
+            SP_OBJECT_ID=$(az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "$SP_OBJECT_ID" ]; then
+            echo "::warning::Logic Apps first-party SP object id unresolved. Set repo variable LOGICAPPS_FIRSTPARTY_SP_OBJECT_ID (or grant the deploy SP Microsoft Graph directory-read). The IA->Key Vault cert grants will be skipped and AS2 signing will fail at runtime until this is set."
+          else
+            echo "✅ Logic Apps first-party SP object id resolved"
           fi
           echo "objectId=$SP_OBJECT_ID" >> $GITHUB_OUTPUT
-          echo "✅ Logic Apps first-party SP object id resolved"
 
       - name: Deploy Bicep template
         id: deploy
