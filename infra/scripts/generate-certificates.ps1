@@ -177,10 +177,10 @@ foreach ($certSpec in $leafCerts) {
     }
 
     # Map usage strings to KeyUsage enum
-    $keyUsageFlags = [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::None
-    foreach ($usage in $certSpec.Usage) {
-        $keyUsageFlags = $keyUsageFlags -bor [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::$usage
-    }
+    # New-SelfSignedCertificate -KeyUsage expects an ARRAY of enum values (e.g.
+    # DigitalSignature, NonRepudiation), not a single combined X509KeyUsageFlags value.
+    # Pass the usage list from the spec directly.
+    $keyUsage = $certSpec.Usage
 
     # Generate leaf certificate signed by Root CA (in practice, for a demo we'll use self-signed; real chaining requires cert chaining logic)
     # For simplicity in a demo script, we generate self-signed leaves with appropriate key usage
@@ -190,7 +190,7 @@ foreach ($certSpec in $leafCerts) {
         -KeyLength 2048 `
         -NotAfter (Get-Date).AddYears(2) `
         -CertStoreLocation Cert:\CurrentUser\My `
-        -KeyUsage $keyUsageFlags `
+        -KeyUsage $keyUsage `
         -KeyExportPolicy Exportable `
         -HashAlgorithm SHA256 `
         -Type Custom
