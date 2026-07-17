@@ -75,8 +75,10 @@ jobs:
           SUPPLIER_CONTENT_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierContentShareSecretName.value')
           SQL_SERVER_FQDN=$(echo $DEPLOYMENT_OUTPUT | jq -r '.sqlServerFqdn.value')
           SQL_DATABASE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.sqlDatabaseName.value')
-          PURCHASER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.namingOutputs.value.purchaserUami')
-          SUPPLIER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.namingOutputs.value.supplierUami')
+          PURCHASER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserUamiName.value')
+          SUPPLIER_UAMI_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierUamiName.value')
+          PURCHASER_UAMI_CLIENTID=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserUamiClientId.value')
+          SUPPLIER_UAMI_CLIENTID=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierUamiClientId.value')
           RG_PURCHASER=$(echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupPurchaser.value')
           RG_SUPPLIER=$(echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupSupplier.value')
           
@@ -92,6 +94,8 @@ jobs:
           echo "sqlDatabaseName=$SQL_DATABASE_NAME" >> $GITHUB_OUTPUT
           echo "purchaserUamiName=$PURCHASER_UAMI_NAME" >> $GITHUB_OUTPUT
           echo "supplierUamiName=$SUPPLIER_UAMI_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserUamiClientId=$PURCHASER_UAMI_CLIENTID" >> $GITHUB_OUTPUT
+          echo "supplierUamiClientId=$SUPPLIER_UAMI_CLIENTID" >> $GITHUB_OUTPUT
           echo "rgPurchaser=$RG_PURCHASER" >> $GITHUB_OUTPUT
           echo "rgSupplier=$RG_SUPPLIER" >> $GITHUB_OUTPUT
           
@@ -114,9 +118,13 @@ jobs:
             if (-not (Get-Module -ListAvailable SqlServer)) { Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber }
             Import-Module SqlServer
             $token = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+            $pSid = '0x' + ((([guid]'${{ steps.deploy.outputs.purchaserUamiClientId }}').ToByteArray() | ForEach-Object { $_.ToString('X2') }) -join '')
+            $sSid = '0x' + ((([guid]'${{ steps.deploy.outputs.supplierUamiClientId }}').ToByteArray() | ForEach-Object { $_.ToString('X2') }) -join '')
             $subst = (Get-Content infra/sql/create-users-roles.sql -Raw) `
               -replace '\{\{PURCHASER_UAMI_NAME\}\}', '${{ steps.deploy.outputs.purchaserUamiName }}' `
-              -replace '\{\{SUPPLIER_UAMI_NAME\}\}', '${{ steps.deploy.outputs.supplierUamiName }}'
+              -replace '\{\{SUPPLIER_UAMI_NAME\}\}', '${{ steps.deploy.outputs.supplierUamiName }}' `
+              -replace '\{\{PURCHASER_UAMI_SID\}\}', $pSid `
+              -replace '\{\{SUPPLIER_UAMI_SID\}\}', $sSid
             $tmp = New-TemporaryFile
             Set-Content -Path $tmp -Value $subst
             Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -InputFile $tmp -ErrorAction Stop

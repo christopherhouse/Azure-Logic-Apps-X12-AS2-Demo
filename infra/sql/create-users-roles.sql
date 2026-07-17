@@ -16,10 +16,10 @@
 -- CREATE CONTAINED USERS (idempotent)
 -- ==============================================================================
 
--- Purchaser UAMI user
-IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{{PURCHASER_UAMI_NAME}}' AND type = 'E')
+-- Purchaser UAMI user (SID-based — no directory lookup / no server identity required)
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{{PURCHASER_UAMI_NAME}}')
 BEGIN
-    CREATE USER [{{PURCHASER_UAMI_NAME}}] FROM EXTERNAL PROVIDER;
+    CREATE USER [{{PURCHASER_UAMI_NAME}}] WITH SID = {{PURCHASER_UAMI_SID}}, TYPE = E;
     PRINT 'Created user: {{PURCHASER_UAMI_NAME}}';
 END
 ELSE
@@ -28,10 +28,10 @@ BEGIN
 END
 GO
 
--- Supplier UAMI user
-IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{{SUPPLIER_UAMI_NAME}}' AND type = 'E')
+-- Supplier UAMI user (SID-based — no directory lookup / no server identity required)
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '{{SUPPLIER_UAMI_NAME}}')
 BEGIN
-    CREATE USER [{{SUPPLIER_UAMI_NAME}}] FROM EXTERNAL PROVIDER;
+    CREATE USER [{{SUPPLIER_UAMI_NAME}}] WITH SID = {{SUPPLIER_UAMI_SID}}, TYPE = E;
     PRINT 'Created user: {{SUPPLIER_UAMI_NAME}}';
 END
 ELSE
