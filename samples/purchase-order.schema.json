@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edi-demo/schemas/purchase-order.schema.json",
+  "type": "object",
+  "required": ["purchaseOrder"],
+  "additionalProperties": false,
+  "properties": {
+    "purchaseOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["poNumber", "orderDate", "currency", "buyer", "seller", "shipTo", "billTo", "lines"],
+      "properties": {
+        "poNumber":              { "type": "string", "minLength": 1, "maxLength": 22 },
+        "orderDate":             { "type": "string", "format": "date" },
+        "requestedDeliveryDate": { "type": "string", "format": "date" },
+        "currency":              { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "buyer":  { "$ref": "#/$defs/party" },
+        "seller": { "$ref": "#/$defs/party" },
+        "shipTo": { "$ref": "#/$defs/address" },
+        "billTo": { "$ref": "#/$defs/address" },
+        "lines": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/line" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id":   { "type": "string", "minLength": 1, "maxLength": 15 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 60 }
+      }
+    },
+    "address": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "line1", "city", "state", "postalCode", "country"],
+      "properties": {
+        "name":       { "type": "string", "minLength": 1, "maxLength": 60 },
+        "line1":      { "type": "string", "minLength": 1, "maxLength": 55 },
+        "line2":      { "type": ["string", "null"], "maxLength": 55 },
+        "city":       { "type": "string", "minLength": 1, "maxLength": 30 },
+        "state":      { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "postalCode": { "type": "string", "minLength": 3, "maxLength": 15 },
+        "country":    { "type": "string", "pattern": "^[A-Z]{2}$" }
+      }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lineNumber", "sku", "quantity", "uom", "unitPrice"],
+      "properties": {
+        "lineNumber":  { "type": "integer", "minimum": 1 },
+        "sku":         { "type": "string", "minLength": 1, "maxLength": 30 },
+        "description": { "type": "string", "maxLength": 80 },
+        "quantity":    { "type": "number", "exclusiveMinimum": 0 },
+        "uom":         { "type": "string", "minLength": 1, "maxLength": 2 },
+        "unitPrice":   { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -16,8 +16,19 @@
 //   Storage Table Data Contributor:  0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3
 //   Key Vault Secrets User:          4633458b-17de-408a-b874-0445c86b69e6
 //   Key Vault Certificate User:      db79e9a7-68ee-4b58-9aeb-b90e7c24fcba
+//   Key Vault Crypto User:           12338af0-0e69-4776-bea7-57ae8d297424
 //   Service Bus Data Sender:         69a216fc-b8fb-44d8-bc22-1f3c2cd27a39
 //   Service Bus Data Receiver:       4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0
+//
+// Integration Account private AS2 certificates reference a Key Vault key rather than embedding
+// the private key. Per Microsoft Learn ("Add certificates to secure B2B messages in workflows
+// for Azure Logic Apps" — logic-apps-enterprise-integration-certificates), the identity that
+// reads Key Vault for this is the FIRST-PARTY Azure Logic Apps service principal
+// (well-known app ID 7cd684f4-8a78-49b0-91ec-6a35d38739ba), NOT the Integration Account's
+// managed identity. It requires list/get/decrypt/sign on the key vault. We grant it
+// Key Vault Crypto User (key get + sign/decrypt) and Key Vault Secrets User (list/get) on the
+// shared vault. Its per-tenant object ID must be resolved at deploy time
+// (`az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv`) and passed in.
 
 targetScope = 'subscription'
 
@@ -52,6 +63,13 @@ param rgSupplier string
 @description('Name of the Shared resource group')
 param rgShared string
 
+@description('''Object ID (principal ID) of the first-party Azure Logic Apps service principal
+(well-known app ID 7cd684f4-8a78-49b0-91ec-6a35d38739ba) in this tenant. Resolve at deploy time
+with `az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv`. Leave empty to
+skip the Integration Account private-certificate Key Vault grants (e.g. when AS2 private certs
+are not yet configured).''')
+param logicAppsServicePrincipalObjectId string = ''
+
 // ============================================================================
 // ROLE DEFINITION IDs
 // ============================================================================
@@ -61,6 +79,7 @@ var storageQueueDataContributor = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var storageTableDataContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
 var keyVaultCertificateUser = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'
+var keyVaultCryptoUser = '12338af0-0e69-4776-bea7-57ae8d297424'
 var serviceBusDataSender = '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39'
 var serviceBusDataReceiver = '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'
 
@@ -233,6 +252,33 @@ module supplierServiceBusReceiver '../modules/role-assignment.bicep' = {
     roleDefinitionId: serviceBusDataReceiver
     targetResourceId: serviceBusNamespaceId
     uniqueSuffix: 'supplier-sb-receiver'
+  }
+}
+
+// ============================================================================
+// AZURE LOGIC APPS FIRST-PARTY SERVICE PRINCIPAL — KEY VAULT ROLES
+// (Integration Account private AS2 certificate → Key Vault key binding, design §5.5)
+// Scoped to the shared Key Vault. Only deployed when the SP object ID is supplied.
+// ============================================================================
+module logicAppsSpKvCryptoUser '../modules/role-assignment.bicep' = if (!empty(logicAppsServicePrincipalObjectId)) {
+  name: 'logicapps-sp-kv-crypto-user'
+  scope: resourceGroup(rgShared)
+  params: {
+    principalId: logicAppsServicePrincipalObjectId
+    roleDefinitionId: keyVaultCryptoUser
+    targetResourceId: keyVaultId
+    uniqueSuffix: 'logicapps-sp-crypto-user'
+  }
+}
+
+module logicAppsSpKvSecretsUser '../modules/role-assignment.bicep' = if (!empty(logicAppsServicePrincipalObjectId)) {
+  name: 'logicapps-sp-kv-secrets-user'
+  scope: resourceGroup(rgShared)
+  params: {
+    principalId: logicAppsServicePrincipalObjectId
+    roleDefinitionId: keyVaultSecretsUser
+    targetResourceId: keyVaultId
+    uniqueSuffix: 'logicapps-sp-secrets-user'
   }
 }
 

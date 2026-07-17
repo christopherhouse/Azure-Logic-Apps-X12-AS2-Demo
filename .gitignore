@@ -11,3 +11,4 @@
 
 # Compiled ARM output from 'az bicep build'
 infra/main.json
+infra/integration-account/ia-content.json

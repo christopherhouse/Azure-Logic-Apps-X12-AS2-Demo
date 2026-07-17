@@ -1,0 +1,27 @@
+{
+  "purchaseOrder": {
+    "orderDate": "07/17/2026",
+    "currency": "usd",
+    "buyer":  { "id": "PURCHASER01", "name": "Contoso Buying Co" },
+    "shipTo": {
+      "name": "Contoso DC West",
+      "line1": "100 Warehouse Way",
+      "city": "Tacoma",
+      "state": "Washington",
+      "postalCode": "98402",
+      "country": "US"
+    },
+    "billTo": {
+      "name": "Contoso Accounts Payable",
+      "line1": "1 Contoso Plaza",
+      "city": "Redmond",
+      "state": "WA",
+      "postalCode": "98052",
+      "country": "US"
+    },
+    "lines": [
+      { "lineNumber": 0, "sku": "SKU-1001", "quantity": 0, "uom": "EACH", "unitPrice": -1 }
+    ],
+    "unexpectedField": "should be rejected by additionalProperties:false"
+  }
+}

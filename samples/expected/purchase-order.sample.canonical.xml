@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  purchase-order.sample.canonical.xml
+  =============================================================================
+  Intermediate canonical XML that mirrors the workflow's step 5a:
+      Compose_Canonical_Xml = @xml(body('Parse_Purchase_Order'))
+  i.e. xml(json(purchase-order.sample.json)).
+
+  This is the INPUT to the Transform XML action (step 5b, map
+  PO_Canonical_to_X12_850_006030.xslt). It conforms to
+  logicapps/purchaser/Artifacts/Schemas/PurchaseOrder_Canonical.xsd.
+
+  Notes on faithfully reproducing xml(json(...)):
+    * No target namespace; element names == JSON keys.
+    * The "lines" array is rendered as REPEATED <lines> sibling elements
+      (one per array item), per the canonical XSD's array-shape rule.
+    * JSON number 2.50 parses to 2.5, so <unitPrice> renders 2.5 (trailing
+      zero dropped). Expected X12 PO104 therefore shows 2.5, not 2.50.
+    * shipTo.line2 is JSON null -> omitted here (the XSLT's
+      normalize-space(line2)!='' guard treats null/empty the same: no N302).
+  =============================================================================
+-->
+<purchaseOrder>
+  <poNumber>PO-2026-0001</poNumber>
+  <orderDate>2026-07-17</orderDate>
+  <requestedDeliveryDate>2026-07-31</requestedDeliveryDate>
+  <currency>USD</currency>
+  <buyer>
+    <id>PURCHASER01</id>
+    <name>Contoso Buying Co</name>
+  </buyer>
+  <seller>
+    <id>SUPPLIER01</id>
+    <name>Fabrikam Supply Co</name>
+  </seller>
+  <shipTo>
+    <name>Contoso DC West</name>
+    <line1>100 Warehouse Way</line1>
+    <city>Tacoma</city>
+    <state>WA</state>
+    <postalCode>98402</postalCode>
+    <country>US</country>
+  </shipTo>
+  <billTo>
+    <name>Contoso Accounts Payable</name>
+    <line1>1 Contoso Plaza</line1>
+    <line2>Suite 400</line2>
+    <city>Redmond</city>
+    <state>WA</state>
+    <postalCode>98052</postalCode>
+    <country>US</country>
+  </billTo>
+  <lines>
+    <lineNumber>1</lineNumber>
+    <sku>SKU-1001</sku>
+    <description>Widget, 10mm</description>
+    <quantity>120</quantity>
+    <uom>EA</uom>
+    <unitPrice>2.5</unitPrice>
+  </lines>
+  <lines>
+    <lineNumber>2</lineNumber>
+    <sku>SKU-2002</sku>
+    <description>Gadget, blue</description>
+    <quantity>40</quantity>
+    <uom>EA</uom>
+    <unitPrice>9.99</unitPrice>
+  </lines>
+  <lines>
+    <lineNumber>3</lineNumber>
+    <sku>SKU-3003</sku>
+    <description>Bracket, steel</description>
+    <quantity>500</quantity>
+    <uom>EA</uom>
+    <unitPrice>0.75</unitPrice>
+  </lines>
+</purchaseOrder>

@@ -51,6 +51,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve Logic Apps first-party service principal object id
+        id: spid
+        shell: bash
+        run: |
+          # design §5.5 + Zoe's RBAC: the Azure Logic Apps first-party enterprise app
+          # (well-known app id 7cd684f4-8a78-49b0-91ec-6a35d38739ba). Its object id in THIS
+          # tenant activates Zoe's guarded IA->Key Vault grants (KV Crypto User + Secrets User),
+          # which the IA needs to read the purchaser signing KEY at AS2 send time.
+          SP_OBJECT_ID=$(az ad sp show --id 7cd684f4-8a78-49b0-91ec-6a35d38739ba --query id -o tsv)
+          if [ -z "$SP_OBJECT_ID" ]; then
+            echo "::error::Could not resolve Logic Apps first-party SP object id"; exit 1
+          fi
+          echo "objectId=$SP_OBJECT_ID" >> $GITHUB_OUTPUT
+          echo "✅ Logic Apps first-party SP object id resolved"
+
       - name: Deploy Bicep template
         id: deploy
         run: |
@@ -60,6 +75,7 @@ jobs:
             --location centralus \
             --template-file infra/main.bicep \
             --parameters infra/main.bicepparam \
+            --parameters logicAppsServicePrincipalObjectId='${{ steps.spid.outputs.objectId }}' \
             --query 'properties.outputs' \
             --output json)
           
@@ -99,6 +115,22 @@ jobs:
           echo "rgPurchaser=$RG_PURCHASER" >> $GITHUB_OUTPUT
           echo "rgSupplier=$RG_SUPPLIER" >> $GITHUB_OUTPUT
           
+          # EDI epic outputs (design §5/§6/§8)
+          KEY_VAULT_ID=$(echo $DEPLOYMENT_OUTPUT | jq -r '.keyVaultId.value')
+          KEY_VAULT_URI=$(echo $DEPLOYMENT_OUTPUT | jq -r '.keyVaultUri.value')
+          PURCHASER_IA_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserIntegrationAccountName.value')
+          PURCHASER_IA_CALLBACK_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserIaCallbackSecretName.value')
+          SUPPLIER_AS2_ENDPOINT_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierAs2EndpointSecretName.value')
+          X12_AGREEMENT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.x12AgreementName.value')
+          SUPPLIER_ACK_WORKFLOW=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierInboundAckWorkflowName.value')
+          echo "keyVaultId=$KEY_VAULT_ID" >> $GITHUB_OUTPUT
+          echo "keyVaultUri=$KEY_VAULT_URI" >> $GITHUB_OUTPUT
+          echo "purchaserIaName=$PURCHASER_IA_NAME" >> $GITHUB_OUTPUT
+          echo "purchaserIaCallbackSecret=$PURCHASER_IA_CALLBACK_SECRET" >> $GITHUB_OUTPUT
+          echo "supplierAs2EndpointSecret=$SUPPLIER_AS2_ENDPOINT_SECRET" >> $GITHUB_OUTPUT
+          echo "x12AgreementName=$X12_AGREEMENT_NAME" >> $GITHUB_OUTPUT
+          echo "supplierAckWorkflow=$SUPPLIER_ACK_WORKFLOW" >> $GITHUB_OUTPUT
+          
           echo "✅ Deployment outputs captured"
         shell: bash
 
@@ -134,6 +166,155 @@ jobs:
             Write-Host "Removing temporary SQL firewall rule $ruleName"
             az sql server firewall-rule delete -g $rg -s $serverName -n $ruleName --only-show-errors | Out-Null
           }
+
+      - name: Post-Deploy - Run SQL DDL (tables + upsert proc)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $server = '${{ steps.deploy.outputs.sqlServerFqdn }}'
+          $serverName = $server.Split('.')[0]
+          $db = '${{ steps.deploy.outputs.sqlDatabaseName }}'
+          $rg = 'rg-edi-shared'
+          $ruleName = "gh-ddl-$env:GITHUB_RUN_ID"
+          $ip = (Invoke-RestMethod -Uri 'https://api.ipify.org')
+          Write-Host "Adding temporary SQL firewall rule $ruleName for $ip"
+          az sql server firewall-rule create -g $rg -s $serverName -n $ruleName --start-ip-address $ip --end-ip-address $ip --only-show-errors | Out-Null
+          try {
+            if (-not (Get-Module -ListAvailable SqlServer)) { Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber }
+            Import-Module SqlServer
+            $token = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+            foreach ($f in @('infra/sql/schema/010-tables.sql','infra/sql/schema/020-usp-upsert.sql')) {
+              Write-Host "Applying $f"
+              Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -InputFile $f -ErrorAction Stop
+            }
+            Write-Host "SQL DDL applied (tables + upsert proc)"
+          }
+          finally {
+            Write-Host "Removing temporary SQL firewall rule $ruleName"
+            az sql server firewall-rule delete -g $rg -s $serverName -n $ruleName --only-show-errors | Out-Null
+          }
+
+      - name: Post-Deploy - Register X12 schema via REST contentLink (>2 MB)
+        id: schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          # design §4.3/§8-C: the 2.15 MB X12_00603_850.xsd exceeds the inline `content` limit
+          # AND the ARM schema resource exposes no writable `contentLink`, so we upload the xsd to
+          # blob and register the schema via the Logic REST API contentLink. Agreements resolve
+          # this schema BY NAME, so it must exist before the IA content deploy.
+          RG='${{ steps.deploy.outputs.rgPurchaser }}'
+          STORAGE='${{ steps.deploy.outputs.purchaserStorageName }}'
+          IA='${{ steps.deploy.outputs.purchaserIaName }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          XSD='infra/integration-account/schemas/X12_00603_850.xsd'
+          KEY=$(az storage account keys list -g "$RG" -n "$STORAGE" --query '[0].value' -o tsv)
+          az storage container create --account-name "$STORAGE" --account-key "$KEY" --name ia-artifacts --only-show-errors 1>/dev/null
+          az storage blob upload --account-name "$STORAGE" --account-key "$KEY" --container-name ia-artifacts \
+            --name X12_00603_850.xsd --file "$XSD" --overwrite --only-show-errors 1>/dev/null
+          EXPIRY=$(date -u -d '2 hours' '+%Y-%m-%dT%H:%MZ')
+          SAS=$(az storage blob generate-sas --account-name "$STORAGE" --account-key "$KEY" \
+            --container-name ia-artifacts --name X12_00603_850.xsd --permissions r --expiry "$EXPIRY" -o tsv)
+          BLOB_URL="https://${STORAGE}.blob.core.windows.net/ia-artifacts/X12_00603_850.xsd?${SAS}"
+          SCHEMA_ID="/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Logic/integrationAccounts/${IA}/schemas/X12_00603_850"
+          LOCATION=$(az group show -n "$RG" --query location -o tsv)
+          BODY=$(jq -n --arg uri "$BLOB_URL" --arg loc "$LOCATION" \
+            '{location:$loc, properties:{schemaType:"Xml", contentType:"application/xml", contentLink:{uri:$uri}}}')
+          az rest --method put \
+            --url "https://management.azure.com${SCHEMA_ID}?api-version=2019-05-01" \
+            --headers 'Content-Type=application/json' \
+            --body "$BODY" 1>/dev/null
+          echo "✅ Schema X12_00603_850 registered via contentLink"
+
+      - name: Post-Deploy - Deploy Integration Account content (partners, certs, agreements)
+        id: iacontent
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgPurchaser }}'
+          IA='${{ steps.deploy.outputs.purchaserIaName }}'
+          KV_ID='${{ steps.deploy.outputs.keyVaultId }}'
+          KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
+          X12_NAME='${{ steps.deploy.outputs.x12AgreementName }}'
+          # cert-gen (design §8 #8) is a documented OUT-OF-BAND prerequisite. Guard gracefully:
+          # if the supplier ENCRYPTION public cert is not yet in Key Vault, skip IA content and the
+          # downstream EDI steps so an infra-only run stays green.
+          SUP_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-encryption --query cer -o tsv 2>/dev/null || true)
+          if [ -z "$SUP_CER" ]; then
+            echo "::warning::Supplier encryption cert not in Key Vault ($KV_NAME). Run cert-gen (design §8 #8) before EDI content deploy. Skipping IA content + supplier-URL injection."
+            echo "ediReady=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          az deployment group create -g "$RG" \
+            --template-file infra/integration-account/ia-content.bicep \
+            --parameters integrationAccountName="$IA" keyVaultResourceId="$KV_ID" \
+                         supplierEncryptionPublicCertificate="$SUP_CER" x12AgreementName="$X12_NAME" \
+            1>/dev/null
+          echo "ediReady=true" >> $GITHUB_OUTPUT
+          echo "✅ Integration Account content deployed (partners, certs, agreements)"
+
+      - name: Post-Deploy - Publish IA callback URL to Key Vault
+        if: steps.iacontent.outputs.ediReady == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgPurchaser }}'
+          IA='${{ steps.deploy.outputs.purchaserIaName }}'
+          KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
+          SECRET='${{ steps.deploy.outputs.purchaserIaCallbackSecret }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          IA_ID="/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Logic/integrationAccounts/${IA}"
+          # listCallbackUrl returns a SAS-bearing URL -> store as a KV secret referenced by the
+          # purchaser WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting (KV ref, wired in Bicep).
+          CALLBACK=$(az rest --method post \
+            --url "https://management.azure.com${IA_ID}/listCallbackUrl?api-version=2019-05-01" \
+            --headers 'Content-Type=application/json' \
+            --body '{"keyType":"Primary"}' --query value -o tsv)
+          az keyvault secret set --vault-name "$KV_NAME" --name "$SECRET" --value "$CALLBACK" --only-show-errors 1>/dev/null
+          echo "✅ IA callback URL stored in Key Vault secret $SECRET"
+
+      - name: Post-Deploy - Deploy SUPPLIER workflow (first, design §8)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgSupplier }}'
+          APP='${{ steps.deploy.outputs.supplierLogicAppName }}'
+          ( cd logicapps/supplier && zip -r ../../supplier-app.zip . -x '*.git*' 1>/dev/null )
+          az functionapp deployment source config-zip -g "$RG" -n "$APP" --src supplier-app.zip 1>/dev/null
+          echo "✅ Supplier workflow deployed"
+
+      - name: Post-Deploy - Deploy PURCHASER workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgPurchaser }}'
+          APP='${{ steps.deploy.outputs.purchaserLogicAppName }}'
+          ( cd logicapps/purchaser && zip -r ../../purchaser-app.zip . -x '*.git*' 1>/dev/null )
+          az functionapp deployment source config-zip -g "$RG" -n "$APP" --src purchaser-app.zip 1>/dev/null
+          echo "✅ Purchaser workflow deployed"
+
+      - name: Post-Deploy - Supplier URL injection -> Key Vault -> restart purchaser (design §6)
+        if: steps.iacontent.outputs.ediReady == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG_SUP='${{ steps.deploy.outputs.rgSupplier }}'
+          RG_PUR='${{ steps.deploy.outputs.rgPurchaser }}'
+          SUP_APP='${{ steps.deploy.outputs.supplierLogicAppName }}'
+          PUR_APP='${{ steps.deploy.outputs.purchaserLogicAppName }}'
+          WF='${{ steps.deploy.outputs.supplierAckWorkflow }}'
+          KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
+          SECRET='${{ steps.deploy.outputs.supplierAs2EndpointSecret }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          # listCallbackUrl on the supplier inbound-ack manual trigger (Logic App Standard runtime API).
+          URL=$(az rest --method post \
+            --url "https://management.azure.com/subscriptions/${SUB}/resourceGroups/${RG_SUP}/providers/Microsoft.Web/sites/${SUP_APP}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${WF}/triggers/manual/listCallbackUrl?api-version=2022-03-01" \
+            --query value -o tsv)
+          az keyvault secret set --vault-name "$KV_NAME" --name "$SECRET" --value "$URL" --only-show-errors 1>/dev/null
+          # SupplierAs2Endpoint__url purchaser app setting is a KV reference (wired in Bicep) -> restart to resolve.
+          az functionapp restart -g "$RG_PUR" -n "$PUR_APP" 1>/dev/null
+          echo "✅ Supplier AS2 endpoint injected into Key Vault; purchaser restarted"
+
       - name: Deployment complete
         run: |
           echo "=========================================="

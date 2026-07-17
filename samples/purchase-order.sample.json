@@ -1,0 +1,33 @@
+{
+  "purchaseOrder": {
+    "poNumber": "PO-2026-0001",
+    "orderDate": "2026-07-17",
+    "requestedDeliveryDate": "2026-07-31",
+    "currency": "USD",
+    "buyer":  { "id": "PURCHASER01", "name": "Contoso Buying Co" },
+    "seller": { "id": "SUPPLIER01",  "name": "Fabrikam Supply Co" },
+    "shipTo": {
+      "name": "Contoso DC West",
+      "line1": "100 Warehouse Way",
+      "line2": null,
+      "city": "Tacoma",
+      "state": "WA",
+      "postalCode": "98402",
+      "country": "US"
+    },
+    "billTo": {
+      "name": "Contoso Accounts Payable",
+      "line1": "1 Contoso Plaza",
+      "line2": "Suite 400",
+      "city": "Redmond",
+      "state": "WA",
+      "postalCode": "98052",
+      "country": "US"
+    },
+    "lines": [
+      { "lineNumber": 1, "sku": "SKU-1001", "description": "Widget, 10mm",   "quantity": 120, "uom": "EA", "unitPrice": 2.50 },
+      { "lineNumber": 2, "sku": "SKU-2002", "description": "Gadget, blue",   "quantity": 40,  "uom": "EA", "unitPrice": 9.99 },
+      { "lineNumber": 3, "sku": "SKU-3003", "description": "Bracket, steel", "quantity": 500, "uom": "EA", "unitPrice": 0.75 }
+    ]
+  }
+}
