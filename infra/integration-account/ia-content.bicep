@@ -324,7 +324,6 @@ resource x12Agreement 'Microsoft.Logic/integrationAccounts/agreements@2019-05-01
             schemaReferences: [
               {
                 messageId: '850'
-                senderApplicationId: 'PURCHASER01'
                 schemaVersion: '00603'
                 schemaName: schemaName
               }
