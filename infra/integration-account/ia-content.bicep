@@ -45,6 +45,12 @@ param purchaserSigningKeyName string = 'demo-as2-purchaser-signing'
 LATEST version (recommended for the demo).''')
 param purchaserSigningKeyVersion string = ''
 
+@description('''Base64-encoded PUBLIC certificate (DER `.cer`) for the purchaser SIGNING cert
+(`demo-as2-purchaser-signing`). Required because a private IA certificate must carry its public
+cert body alongside the Key Vault key reference. Read from Key Vault by CI at deploy time:
+`az keyvault certificate show --vault-name <kv> --name demo-as2-purchaser-signing --query cer -o tsv`.''')
+param purchaserSigningPublicCertificate string
+
 @description('''Base64-encoded PUBLIC certificate (DER `.cer`) for the supplier ENCRYPTION cert
 (`demo-as2-supplier-encryption`). Read from Key Vault by CI at deploy time:
 `az keyvault certificate show --vault-name <kv> --name demo-as2-supplier-encryption --query cer -o tsv`.''')
@@ -116,6 +122,10 @@ resource purchaserSigningCert 'Microsoft.Logic/integrationAccounts/certificates@
   parent: integrationAccount
   name: purchaserSigningCertName
   properties: {
+    // A private IA certificate needs BOTH the public certificate body (so the IA knows the
+    // cert's public part) AND the Key Vault key reference (private key for signing). The AS2
+    // agreement that references this cert requires publicCertificate to be present.
+    publicCertificate: purchaserSigningPublicCertificate
     key: {
       keyName: purchaserSigningKeyName
       keyVault: {
@@ -374,7 +384,7 @@ resource as2Agreement 'Microsoft.Logic/integrationAccounts/agreements@2019-05-01
               sendMDNAsynchronously: false
               signOutboundMDNIfOptional: false
               sendInboundMDNToMessageBox: true
-              micHashingAlgorithm: 'SHA256'
+              micHashingAlgorithm: 'SHA2256'
               dispositionNotificationTo: 'http://localhost'
               mdnText: ''
             }
@@ -397,7 +407,7 @@ resource as2Agreement 'Microsoft.Logic/integrationAccounts/agreements@2019-05-01
               checkCertificateRevocationListOnReceive: false
               checkCertificateRevocationListOnSend: false
               encryptionAlgorithm: 'AES256'
-              signingAlgorithm: 'SHA256'
+              signingAlgorithm: 'SHA2256'
             }
             envelopeSettings: {
               messageContentType: 'application/edi-x12'
@@ -434,7 +444,7 @@ resource as2Agreement 'Microsoft.Logic/integrationAccounts/agreements@2019-05-01
               sendMDNAsynchronously: false
               signOutboundMDNIfOptional: true
               sendInboundMDNToMessageBox: true
-              micHashingAlgorithm: 'SHA256'
+              micHashingAlgorithm: 'SHA2256'
               dispositionNotificationTo: 'http://localhost'
               mdnText: ''
             }
@@ -459,7 +469,7 @@ resource as2Agreement 'Microsoft.Logic/integrationAccounts/agreements@2019-05-01
               checkCertificateRevocationListOnReceive: false
               checkCertificateRevocationListOnSend: false
               encryptionAlgorithm: 'AES256'
-              signingAlgorithm: 'SHA256'
+              signingAlgorithm: 'SHA2256'
             }
             envelopeSettings: {
               messageContentType: 'application/edi-x12'

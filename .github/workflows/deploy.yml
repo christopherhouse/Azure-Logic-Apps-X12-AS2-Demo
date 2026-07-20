@@ -247,18 +247,20 @@ jobs:
           KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
           X12_NAME='${{ steps.deploy.outputs.x12AgreementName }}'
           # cert-gen (design §8 #8) is a documented OUT-OF-BAND prerequisite. Guard gracefully:
-          # if the supplier ENCRYPTION public cert is not yet in Key Vault, skip IA content and the
-          # downstream EDI steps so an infra-only run stays green.
+          # if the AS2 certs are not yet in Key Vault, skip IA content and the downstream EDI
+          # steps so an infra-only run stays green.
           SUP_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-encryption --query cer -o tsv 2>/dev/null || true)
-          if [ -z "$SUP_CER" ]; then
-            echo "::warning::Supplier encryption cert not in Key Vault ($KV_NAME). Run cert-gen (design §8 #8) before EDI content deploy. Skipping IA content + supplier-URL injection."
+          PUR_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-signing --query cer -o tsv 2>/dev/null || true)
+          if [ -z "$SUP_CER" ] || [ -z "$PUR_CER" ]; then
+            echo "::warning::AS2 certs not in Key Vault ($KV_NAME). Run cert-gen (design §8 #8) before EDI content deploy. Skipping IA content + supplier-URL injection."
             echo "ediReady=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           az deployment group create -g "$RG" \
             --template-file infra/integration-account/ia-content.bicep \
             --parameters integrationAccountName="$IA" keyVaultResourceId="$KV_ID" \
-                         supplierEncryptionPublicCertificate="$SUP_CER" x12AgreementName="$X12_NAME" \
+                         supplierEncryptionPublicCertificate="$SUP_CER" \
+                         purchaserSigningPublicCertificate="$PUR_CER" x12AgreementName="$X12_NAME" \
             1>/dev/null
           echo "ediReady=true" >> $GITHUB_OUTPUT
           echo "✅ Integration Account content deployed (partners, certs, agreements)"

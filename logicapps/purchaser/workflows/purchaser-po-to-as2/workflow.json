@@ -213,7 +213,6 @@
               "body": "@body('Encode_to_AS2')?['as2Message']?['content']"
             },
             "trackedProperties": {
-              "poNumber": "@body('Parse_Purchase_Order')?['purchaseOrder']?['poNumber']",
               "supplierResponseStatusCode": "@outputs('POST_AS2_to_supplier')?['statusCode']",
               "mdnReceived": "@not(empty(body('POST_AS2_to_supplier')))"
             }
