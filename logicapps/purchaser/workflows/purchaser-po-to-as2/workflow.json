@@ -47,7 +47,7 @@
                       "poNumber": { "type": "string", "minLength": 1, "maxLength": 22 },
                       "orderDate": { "type": "string", "format": "date" },
                       "requestedDeliveryDate": { "type": "string", "format": "date" },
-                      "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+                      "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
                       "buyer": { "$ref": "#/$defs/party" },
                       "seller": { "$ref": "#/$defs/party" },
                       "shipTo": { "$ref": "#/$defs/address" },
@@ -79,9 +79,9 @@
                       "line1": { "type": "string", "minLength": 1, "maxLength": 55 },
                       "line2": { "type": ["string", "null"], "maxLength": 55 },
                       "city": { "type": "string", "minLength": 1, "maxLength": 30 },
-                      "state": { "type": "string", "pattern": "^[A-Z]{2}$" },
+                      "state": { "type": "string", "minLength": 2, "maxLength": 2 },
                       "postalCode": { "type": "string", "minLength": 3, "maxLength": 15 },
-                      "country": { "type": "string", "pattern": "^[A-Z]{2}$" }
+                      "country": { "type": "string", "minLength": 2, "maxLength": 2 }
                     }
                   },
                   "line": {
