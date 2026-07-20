@@ -17,3 +17,5 @@
 📌 Team update (2026-07-16T11:20:48-05:00): infra build complete (17 resources what-if-validated); CI/CD OIDC-based; docs at README + docs/deployment-guide.md; open item = provision deployment SP + GH secrets (#18) once gh re-authed.
 
 📌 Team update (2026-07-16T12:32:21-05:00): OIDC deployment identity is provisioned and the repo is deploy-ready; humans need to review/merge PR #1 and run the first live deploy. — decided by Zoe
+
+📌 Team update (2026-07-20T10:48:22-05:00): End-to-end purchaser run still needs Service Bus Data Sender on `sb-jci-edi-dev-2vjolmqq` (`rg-edi-shared`) for the deploy SP / workflow managed identity as applicable. — decided by Wash
