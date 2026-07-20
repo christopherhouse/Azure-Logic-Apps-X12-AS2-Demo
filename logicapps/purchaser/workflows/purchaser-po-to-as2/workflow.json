@@ -166,38 +166,26 @@
             }
           },
           "Encode_to_X12_850": {
-            "type": "ServiceProvider",
-            "description": "5c. X12 Encode (built-in). Resolves the X12 send agreement from the linked Integration Account (via WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting); the agreement owns interchange/group/set control numbers. No connections.json entry is required for built-in EDI (design 5.1).",
+            "type": "X12Encode",
+            "description": "5c. X12 Encode (built-in, native in-app action - NOT a service provider). Resolves the X12 send agreement from the linked Integration Account (via WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting); the agreement owns interchange/group/set control numbers. The X12 built-in operation is registered as a connectionProvider, so the action uses type 'X12Encode' with flat inputs - no serviceProviderConfiguration and no connections.json entry (verified against the live runtime operationGroups + Learn logic-apps-enterprise-integration-x12).",
             "runAfter": {
               "Transform_to_X12_850_Xml": ["SUCCEEDED"]
             },
             "inputs": {
-              "parameters": {
-                "messageToEncode": "@body('Transform_to_X12_850_Xml')",
-                "agreementName": "@appsetting('X12AgreementName')"
-              },
-              "serviceProviderConfiguration": {
-                "operationId": "x12Encode",
-                "serviceProviderId": "/serviceProviders/x12"
-              }
+              "messageToEncode": "@body('Transform_to_X12_850_Xml')",
+              "agreementName": "@appsetting('X12AgreementName')"
             }
           },
           "Encode_to_AS2": {
-            "type": "ServiceProvider",
-            "description": "6a. AS2 Encode (built-in AS2 v2). Sign + encrypt and request a synchronous MDN per the AS2 send agreement (resolved by as2From/as2To identities from the linked Integration Account). No connections.json entry is required for built-in AS2 v2 (design 5.1).",
+            "type": "AS2Encode",
+            "description": "6a. AS2 Encode (built-in AS2 v2, native in-app action - NOT a service provider). Sign + encrypt and request a synchronous MDN per the AS2 send agreement (resolved by as2From/as2To identities from the linked Integration Account). The AS2 (v2) built-in operation is registered as a connectionProvider, so the action uses type 'AS2Encode' with flat inputs - no serviceProviderConfiguration and no connections.json entry (verified against the live runtime operationGroups + Learn logic-apps-enterprise-integration-as2).",
             "runAfter": {
               "Encode_to_X12_850": ["SUCCEEDED"]
             },
             "inputs": {
-              "parameters": {
-                "messageToEncode": "@body('Encode_to_X12_850')",
-                "as2From": "PURCHASER01",
-                "as2To": "SUPPLIER01"
-              },
-              "serviceProviderConfiguration": {
-                "operationId": "as2Encode",
-                "serviceProviderId": "/serviceProviders/as2"
-              }
+              "messageToEncode": "@body('Encode_to_X12_850')",
+              "as2From": "PURCHASER01",
+              "as2To": "SUPPLIER01"
             }
           },
           "POST_AS2_to_supplier": {
