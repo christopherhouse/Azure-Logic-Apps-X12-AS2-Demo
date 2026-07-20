@@ -196,9 +196,9 @@
             },
             "inputs": {
               "method": "POST",
-              "uri": "@appsetting('SupplierAs2Endpoint__url')",
-              "headers": "@body('Encode_to_AS2')?['as2Message']?['outboundHeaders']",
-              "body": "@body('Encode_to_AS2')?['as2Message']?['content']"
+              "uri": "@appsetting('SupplierAs2EndpointUrl')",
+              "headers": "@body('Encode_to_AS2')?['messageHeaders']",
+              "body": "@base64ToBinary(body('Encode_to_AS2')?['messageContent']?['$content'])"
             },
             "trackedProperties": {
               "supplierResponseStatusCode": "@outputs('POST_AS2_to_supplier')?['statusCode']",
