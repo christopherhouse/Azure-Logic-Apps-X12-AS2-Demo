@@ -154,18 +154,35 @@ var baseAppSettings = [
     name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
     value: appInsightsConnectionString
   }
-  // --- Host storage via managed identity (no connection string) ---
-  {
-    name: 'AzureWebJobsStorage__accountName'
-    value: storage.name
-  }
+  // --- Host storage via managed identity (identity-based AzureWebJobsStorage, no connection string) ---
+  // The Functions host reads `__credential`; the Workflows Data.Edge runtime reads `__credentialType`.
+  // BOTH must be `managedIdentity` (case-sensitive) or the host fails with ServiceUnavailable. The
+  // UAMI is selected by resource id (NOT clientId) and blob/queue/table service URIs are explicit.
+  // Do NOT emit plain `AzureWebJobsStorage`, `__accountName`, or `__clientId` — they break the
+  // identity-based path (see .squad/decisions.md: identity storage live fix, 2026-07-20).
   {
     name: 'AzureWebJobsStorage__credential'
-    value: 'managedidentity'
+    value: 'managedIdentity'
   }
   {
-    name: 'AzureWebJobsStorage__clientId'
-    value: uamiClientId
+    name: 'AzureWebJobsStorage__credentialType'
+    value: 'managedIdentity'
+  }
+  {
+    name: 'AzureWebJobsStorage__managedIdentityResourceId'
+    value: uamiId
+  }
+  {
+    name: 'AzureWebJobsStorage__blobServiceUri'
+    value: 'https://${storage.name}.blob.${environment().suffixes.storage}'
+  }
+  {
+    name: 'AzureWebJobsStorage__queueServiceUri'
+    value: 'https://${storage.name}.queue.${environment().suffixes.storage}'
+  }
+  {
+    name: 'AzureWebJobsStorage__tableServiceUri'
+    value: 'https://${storage.name}.table.${environment().suffixes.storage}'
   }
   // --- Content share (Azure Files) — sanctioned key exception (spec permits the Azure Files
   // connection string for the Windows hosting model). Must be a REAL connection string at
@@ -226,9 +243,13 @@ var iaLinkAppSettings = empty(integrationAccountCallbackSecretName) ? [] : [
 ]
 
 // Outbound AS2 POST target (purchaser only) — supplier callback URL injected supplier-first by CI (design §6).
+// NOTE: the setting name is the CLEAN `SupplierAs2EndpointUrl` (no double underscore). The `__` variant
+// (`SupplierAs2Endpoint__url`) is treated by the host as a nested config path and resolves to null from
+// `@appsetting('SupplierAs2EndpointUrl')`, which broke the outbound POST (see .squad/decisions.md,
+// "Supplier endpoint URL stabilization"). The workflow reads `@appsetting('SupplierAs2EndpointUrl')`.
 var supplierEndpointAppSettings = empty(supplierEndpointSecretName) ? [] : [
   {
-    name: 'SupplierAs2Endpoint__url'
+    name: 'SupplierAs2EndpointUrl'
     value: '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/${supplierEndpointSecretName})'
   }
 ]
