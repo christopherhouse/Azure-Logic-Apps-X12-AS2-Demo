@@ -158,7 +158,7 @@
               "Compose_Canonical_Xml": ["SUCCEEDED"]
             },
             "inputs": {
-              "content": "@body('Compose_Canonical_Xml')",
+              "content": "@outputs('Compose_Canonical_Xml')",
               "map": {
                 "source": "LogicApp",
                 "name": "PO_Canonical_to_X12_850_006030.xslt"
