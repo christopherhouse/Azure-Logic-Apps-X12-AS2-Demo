@@ -6,9 +6,7 @@
         "fullyQualifiedNamespace": "@appsetting('serviceBus_fullyQualifiedNamespace')",
         "authProvider": {
           "Type": "ManagedServiceIdentity",
-          "Identity": {
-            "UserAssignedIdentity": "@appsetting('serviceBus__managedIdentityResourceId')"
-          }
+          "Identity": "@appsetting('serviceBus__managedIdentityResourceId')"
         }
       },
       "serviceProvider": {
