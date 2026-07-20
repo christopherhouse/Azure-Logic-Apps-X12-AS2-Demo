@@ -9,8 +9,7 @@
         "inputs": {
           "parameters": {
             "topicName": "purchase-orders.received",
-            "subscriptionName": "all-messages",
-            "isSessionsEnabled": false
+            "subscriptionName": "all-messages"
           },
           "serviceProviderConfiguration": {
             "connectionName": "serviceBus",
@@ -18,7 +17,11 @@
             "serviceProviderId": "/serviceProviders/serviceBus"
           }
         },
-        "splitOn": "@triggerOutputs()?['body']"
+        "splitOn": "@triggerOutputs()?['body']",
+        "metadata": {
+          "preservesPartitionKey": true,
+          "preserveOperationId": true
+        }
       }
     },
     "actions": {
