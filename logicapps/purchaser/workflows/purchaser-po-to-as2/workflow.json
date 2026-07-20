@@ -47,7 +47,7 @@
                       "poNumber": { "type": "string", "minLength": 1, "maxLength": 22 },
                       "orderDate": { "type": "string", "format": "date" },
                       "requestedDeliveryDate": { "type": "string", "format": "date" },
-                      "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+                      "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
                       "buyer": { "$ref": "#/$defs/party" },
                       "seller": { "$ref": "#/$defs/party" },
                       "shipTo": { "$ref": "#/$defs/address" },
@@ -79,9 +79,9 @@
                       "line1": { "type": "string", "minLength": 1, "maxLength": 55 },
                       "line2": { "type": ["string", "null"], "maxLength": 55 },
                       "city": { "type": "string", "minLength": 1, "maxLength": 30 },
-                      "state": { "type": "string", "pattern": "^[A-Z]{2}$" },
+                      "state": { "type": "string", "minLength": 2, "maxLength": 2 },
                       "postalCode": { "type": "string", "minLength": 3, "maxLength": 15 },
-                      "country": { "type": "string", "pattern": "^[A-Z]{2}$" }
+                      "country": { "type": "string", "minLength": 2, "maxLength": 2 }
                     }
                   },
                   "line": {
@@ -158,7 +158,7 @@
               "Compose_Canonical_Xml": ["SUCCEEDED"]
             },
             "inputs": {
-              "content": "@body('Compose_Canonical_Xml')",
+              "content": "@outputs('Compose_Canonical_Xml')",
               "map": {
                 "source": "LogicApp",
                 "name": "PO_Canonical_to_X12_850_006030.xslt"
@@ -166,38 +166,26 @@
             }
           },
           "Encode_to_X12_850": {
-            "type": "ServiceProvider",
-            "description": "5c. X12 Encode (built-in). Resolves the X12 send agreement from the linked Integration Account (via WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting); the agreement owns interchange/group/set control numbers. No connections.json entry is required for built-in EDI (design 5.1).",
+            "type": "X12Encode",
+            "description": "5c. X12 Encode (built-in, native in-app action - NOT a service provider). Resolves the X12 send agreement from the linked Integration Account (via WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting); the agreement owns interchange/group/set control numbers. The X12 built-in operation is registered as a connectionProvider, so the action uses type 'X12Encode' with flat inputs - no serviceProviderConfiguration and no connections.json entry (verified against the live runtime operationGroups + Learn logic-apps-enterprise-integration-x12).",
             "runAfter": {
               "Transform_to_X12_850_Xml": ["SUCCEEDED"]
             },
             "inputs": {
-              "parameters": {
-                "messageToEncode": "@body('Transform_to_X12_850_Xml')",
-                "agreementName": "@appsetting('X12AgreementName')"
-              },
-              "serviceProviderConfiguration": {
-                "operationId": "x12Encode",
-                "serviceProviderId": "/serviceProviders/x12"
-              }
+              "messageToEncode": "@body('Transform_to_X12_850_Xml')",
+              "agreementName": "@appsetting('X12AgreementName')"
             }
           },
           "Encode_to_AS2": {
-            "type": "ServiceProvider",
-            "description": "6a. AS2 Encode (built-in AS2 v2). Sign + encrypt and request a synchronous MDN per the AS2 send agreement (resolved by as2From/as2To identities from the linked Integration Account). No connections.json entry is required for built-in AS2 v2 (design 5.1).",
+            "type": "AS2Encode",
+            "description": "6a. AS2 Encode (built-in AS2 v2, native in-app action - NOT a service provider). Sign + encrypt and request a synchronous MDN per the AS2 send agreement (resolved by as2From/as2To identities from the linked Integration Account). The AS2 (v2) built-in operation is registered as a connectionProvider, so the action uses type 'AS2Encode' with flat inputs - no serviceProviderConfiguration and no connections.json entry (verified against the live runtime operationGroups + Learn logic-apps-enterprise-integration-as2).",
             "runAfter": {
               "Encode_to_X12_850": ["SUCCEEDED"]
             },
             "inputs": {
-              "parameters": {
-                "messageToEncode": "@body('Encode_to_X12_850')",
-                "as2From": "PURCHASER01",
-                "as2To": "SUPPLIER01"
-              },
-              "serviceProviderConfiguration": {
-                "operationId": "as2Encode",
-                "serviceProviderId": "/serviceProviders/as2"
-              }
+              "messageToEncode": "@body('Encode_to_X12_850')",
+              "as2From": "PURCHASER01",
+              "as2To": "SUPPLIER01"
             }
           },
           "POST_AS2_to_supplier": {
@@ -208,9 +196,9 @@
             },
             "inputs": {
               "method": "POST",
-              "uri": "@appsetting('SupplierAs2Endpoint__url')",
-              "headers": "@body('Encode_to_AS2')?['as2Message']?['outboundHeaders']",
-              "body": "@body('Encode_to_AS2')?['as2Message']?['content']"
+              "uri": "@appsetting('SupplierAs2EndpointUrl')",
+              "headers": "@body('Encode_to_AS2')?['messageHeaders']",
+              "body": "@base64ToBinary(body('Encode_to_AS2')?['messageContent']?['$content'])"
             },
             "trackedProperties": {
               "supplierResponseStatusCode": "@outputs('POST_AS2_to_supplier')?['statusCode']",

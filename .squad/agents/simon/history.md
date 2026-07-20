@@ -9,3 +9,5 @@
 ## Learnings
 
 <!-- Append new learnings below. Each entry is something lasting about the project. -->
+
+📌 Team update (2026-07-20T14:05:00-05:00): X12 send agreement schema matching failed when senderApplicationId was included in schemaReferences; remove it so the agreement matches registered schema X12_00603_850 by message/version metadata.

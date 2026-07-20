@@ -1,0 +1,52 @@
+{
+  "purchaseOrder": {
+    "poNumber": "PO-E2E-07201052",
+    "orderDate": "2026-07-20",
+    "requestedDeliveryDate": "2026-08-03",
+    "currency": "USD",
+    "buyer": {
+      "id": "PURCHASER01",
+      "name": "Contoso Buying Co"
+    },
+    "seller": {
+      "id": "SUPPLIER01",
+      "name": "Fabrikam Supply Co"
+    },
+    "shipTo": {
+      "name": "Contoso Test Dock",
+      "line1": "100 Test Dock Rd",
+      "line2": null,
+      "city": "Tacoma",
+      "state": "WA",
+      "postalCode": "98402",
+      "country": "US"
+    },
+    "billTo": {
+      "name": "Contoso AP Test",
+      "line1": "1 Contoso Plaza",
+      "line2": "Suite 400",
+      "city": "Redmond",
+      "state": "WA",
+      "postalCode": "98052",
+      "country": "US"
+    },
+    "lines": [
+      {
+        "lineNumber": 1,
+        "sku": "QA-850-001",
+        "description": "QA widget",
+        "quantity": 2,
+        "uom": "EA",
+        "unitPrice": 10.5
+      },
+      {
+        "lineNumber": 2,
+        "sku": "QA-850-002",
+        "description": "QA bracket",
+        "quantity": 5,
+        "uom": "EA",
+        "unitPrice": 3.25
+      }
+    ]
+  }
+}

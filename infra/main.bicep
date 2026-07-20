@@ -271,6 +271,7 @@ module rbac 'rbac/role-assignments.bicep' = {
     supplierUamiPrincipalId: supplierUami.outputs.principalId
     keyVaultId: keyVault.outputs.id
     serviceBusNamespaceId: serviceBus.outputs.namespaceId
+    serviceBusTopicId: '${serviceBus.outputs.namespaceId}/topics/${serviceBus.outputs.topicName}'
     purchaserStorageId: purchaserCompute.outputs.storageId
     supplierStorageId: supplierCompute.outputs.storageId
     rgPurchaser: rgPurchaser

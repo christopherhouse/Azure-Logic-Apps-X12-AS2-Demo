@@ -1,11 +1,11 @@
 {
   "serviceProviderConnections": {
     "serviceBus": {
+      "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
         "fullyQualifiedNamespace": "@appsetting('serviceBus__fullyQualifiedNamespace')",
-        "authentication": {
-          "type": "ManagedServiceIdentity",
-          "identity": "@appsetting('serviceBus__clientId')"
+        "authProvider": {
+          "Type": "ManagedServiceIdentity"
         }
       },
       "serviceProvider": {
@@ -14,12 +14,14 @@
       "displayName": "Service Bus (Managed Identity)"
     },
     "sql": {
+      "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
-        "server": "@appsetting('sql__serverFqdn')",
-        "database": "@appsetting('sql__databaseName')",
-        "authentication": {
-          "type": "ManagedServiceIdentity",
-          "identity": "@appsetting('sql__clientId')"
+        "serverName": "sql-jci-edi-dev-2vjolmqq.database.windows.net",
+        "databaseName": "sqldb-jci-edi-dev",
+        "managedIdentityType": "UserAssigned",
+        "managedIdentityClientId": "8a2d2355-ec3a-421f-ab1d-50ea89f15f83",
+        "authProvider": {
+          "Type": "ManagedServiceIdentity"
         }
       },
       "serviceProvider": {

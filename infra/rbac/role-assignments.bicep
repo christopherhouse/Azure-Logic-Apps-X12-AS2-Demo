@@ -54,6 +54,12 @@ param keyVaultId string
 @description('Full resource ID of the Service Bus namespace (in rg-edi-shared)')
 param serviceBusNamespaceId string
 
+@description('''Full resource ID of the Service Bus topic the purchaser consumes
+(purchase-orders.received). The purchaser UAMI is granted Azure Service Bus Data Receiver here so
+its peek-lock trigger and settlement work — this is the durable grant that made the live E2E
+round-trip succeed (see .squad/decisions.md).''')
+param serviceBusTopicId string
+
 @description('Name of the Purchaser resource group')
 param rgPurchaser string
 
@@ -166,6 +172,23 @@ module purchaserServiceBusSender '../modules/role-assignment.bicep' = {
     roleDefinitionId: serviceBusDataSender
     targetResourceId: serviceBusNamespaceId
     uniqueSuffix: 'purchaser-sb-sender'
+  }
+}
+
+// ============================================================================
+// PURCHASER UAMI — SERVICE BUS DATA RECEIVER (scoped to the purchase-orders.received TOPIC)
+// The purchaser workflow CONSUMES PO messages from the topic (peek-lock trigger + settlement),
+// so it needs Data Receiver on the topic. This durable grant is what made the live end-to-end
+// round-trip work; without it the trigger cannot read messages (see .squad/decisions.md).
+// ============================================================================
+module purchaserServiceBusTopicReceiver '../modules/role-assignment.bicep' = {
+  name: 'purchaser-servicebus-topic-receiver'
+  scope: resourceGroup(rgShared)
+  params: {
+    principalId: purchaserUamiPrincipalId
+    roleDefinitionId: serviceBusDataReceiver
+    targetResourceId: serviceBusTopicId
+    uniqueSuffix: 'purchaser-sb-topic-receiver'
   }
 }
 
