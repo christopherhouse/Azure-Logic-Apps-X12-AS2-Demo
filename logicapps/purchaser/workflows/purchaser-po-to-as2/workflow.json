@@ -9,19 +9,16 @@
         "inputs": {
           "parameters": {
             "topicName": "purchase-orders.received",
-            "subscriptionName": "all-messages"
+            "subscriptionName": "all-messages",
+            "isSessionsEnabled": false
           },
           "serviceProviderConfiguration": {
             "connectionName": "serviceBus",
-            "operationId": "peekLockTopicMessagesV2",
+            "operationId": "peekLockTopicMessages",
             "serviceProviderId": "/serviceProviders/serviceBus"
           }
         },
-        "splitOn": "@triggerOutputs()?['body']",
-        "metadata": {
-          "preservesPartitionKey": true,
-          "preserveOperationId": true
-        }
+        "splitOn": "@triggerOutputs()?['body']"
       }
     },
     "actions": {
@@ -218,13 +215,11 @@
         },
         "inputs": {
           "parameters": {
-            "topicName": "purchase-orders.received",
-            "subscriptionName": "all-messages",
             "lockToken": "@triggerBody()?['lockToken']"
           },
           "serviceProviderConfiguration": {
             "connectionName": "serviceBus",
-            "operationId": "completeTopicMessageV2",
+            "operationId": "completeMessage",
             "serviceProviderId": "/serviceProviders/serviceBus"
           }
         }
@@ -237,15 +232,13 @@
         },
         "inputs": {
           "parameters": {
-            "topicName": "purchase-orders.received",
-            "subscriptionName": "all-messages",
             "lockToken": "@triggerBody()?['lockToken']",
             "deadLetterReason": "PurchaseOrderProcessingFailed",
             "deadLetterErrorDescription": "@{substring(string(result('Process_Purchase_Order')), 0, min(2000, length(string(result('Process_Purchase_Order')))))}"
           },
           "serviceProviderConfiguration": {
             "connectionName": "serviceBus",
-            "operationId": "deadLetterTopicMessageV2",
+            "operationId": "deadLetterMessage",
             "serviceProviderId": "/serviceProviders/serviceBus"
           }
         }

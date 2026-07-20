@@ -3,7 +3,7 @@
     "serviceBus": {
       "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
-        "fullyQualifiedNamespace": "@appsetting('serviceBus_fullyQualifiedNamespace')",
+        "fullyQualifiedNamespace": "@appsetting('serviceBus__fullyQualifiedNamespace')",
         "authProvider": {
           "Type": "ManagedServiceIdentity"
         }
