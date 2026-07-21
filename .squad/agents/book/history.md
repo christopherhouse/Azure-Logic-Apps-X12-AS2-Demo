@@ -16,3 +16,5 @@
 
 📌 Team update (2026-07-20T14:25:00-05:00): Docs/runbook backlog from Step 3: document identity-based AzureWebJobsStorage settings, deploy-SP Key Vault Certificate User + Secrets Officer grants, cert-generation prerequisite, CI schema registration via REST contentLink, Logic Apps __ app-setting gotcha, dev-only CLI Data Sender grant, and purchaser system-MI cleanup/redeploy behavior. — decided by Kaylee
 
+
+📌 Team update (2026-07-20T14:45:00-05:00): Step 4 docs/runbook completed and pushed in commit `8b04bb4` on `bugfix/edi-e2e-live-fixes`, updating PR #11; TBDs remain: SB REST publish command, deploy-SP KV grants, system-MI cleanup, settlement root cause, and ParseJson validation decision. — decided by Book
