@@ -2311,3 +2311,206 @@ codified so a fresh deploy doesn't regress:
   connector's clientId field) to the correct UAMI or you get `AADSTS700016` on the
   system-assigned identity.
 
+---
+
+## 2026-07-21: Supplier Inbound + 997-Return Epic (feature/supplier-inbound-997-workflow)
+
+> Consolidated from 9 inbox files: Mal, Simon ×2, Kaylee, Wash, Zoe, Jayne, Book, Coordinator.
+> 15 decision entries consolidated. No secrets found or carried over. Supersessions recorded below.
+
+### Coordinator build-wave contract — locked (authoritative names everyone binds to)
+**By:** Squad Coordinator
+**What:** Six binding locks for the epic build wave:
+1. **997 via explicit X12 Encode at 006030.** X12 Decode auto-generates only 4010 ACKs — do NOT use it for a version-consistent 006030 demo.
+2. **Dedicated 997 send agreement** `Supplier-Purchaser-X12-997` (GS01=`FA`). Purchaser receives via `Purchaser-Supplier-X12-997`.
+3. **Supplier persistence = `sup` schema:** `sup.[Address]`, `sup.PurchaseOrder`, `sup.PurchaseOrderLine`, `sup.usp_UpsertPurchaseOrder` (idempotent on PoNumber, OPENJSON `@LinesJson`). `SupplierRole` = INSERT + EXECUTE on `SCHEMA::sup` only — no `dbo` writes.
+4. **Non-interleaved dual callback-URL injection:** deploy BOTH workflows → read BOTH trigger callback URLs → write BOTH KV secrets (`supplier-as2-endpoint-url`, `purchaser-997-endpoint-url`) → set BOTH app settings → restart BOTH apps. Never interleave deploy + inject per app (deadlocks CI).
+5. **Workflow names locked:** `supplier-inbound-ack` (trigger = `manual`); new purchaser workflow = `purchaser-inbound-997` (trigger = `manual`).
+6. **All 4 leaf certs active.** Three new private-cert KV key refs resolve through the existing Azure Logic Apps first-party SP (`7cd684f4-8a78-49b0-91ec-6a35d38739ba`) vault-scoped grant — zero new RBAC edges expected (Zoe confirmed).
+
+**Build-wave canonical names:**
+
+| Resource | Locked name |
+|----------|-------------|
+| Supplier IA X12 receive (850) | `Supplier-Purchaser-X12-850` |
+| Supplier IA X12 send (997) | `Supplier-Purchaser-X12-997` |
+| Supplier IA AS2 | `Supplier-Purchaser-AS2` |
+| Purchaser IA X12 receive (997) | `Purchaser-Supplier-X12-997` |
+| Purchaser IA AS2 | `Purchaser-Supplier-AS2` (receive block activated) |
+| Supplier receive map | `logicapps/supplier/Artifacts/Maps/X12_850_006030_to_PO_Canonical.xslt` |
+| Supplier SQL proc | `sup.usp_UpsertPurchaseOrder` |
+| Supplier KV-ref setting (997 target) | `Purchaser997EndpointUrl` → secret `purchaser-997-endpoint-url` |
+| Supplier X12 send agreement setting | `X12SendAgreementName` = `Supplier-Purchaser-X12-997` |
+
+**Why:** All agents bound to these names to prevent naming divergence across IA content, Bicep, workflow expressions, and CI steps.
+**References:** `.squad/decisions/inbox/squad-supplier-build-locks.md`
+
+---
+
+### ⚠ SUPERSESSION: single-bidirectional X12 agreement model superseded by split agreements
+**By:** Book (flagged B-1/B-3), Coordinator (resolved), confirmed Wash/Kaylee
+**Supersedes:** Mal's initial inbox entry which proposed one `Supplier-Purchaser-X12` agreement (receive 850 + send 997 in one bidirectional resource) and `X12AgreementName = Supplier-Purchaser-X12` as the app setting name. That entry predates the build-lock decision and was not updated.
+
+**Built truth (canonical as of 2026-07-21):**
+- Supplier IA: two separate agreements — `Supplier-Purchaser-X12-850` (receive) + `Supplier-Purchaser-X12-997` (send).
+- Purchaser IA: new `Purchaser-Supplier-X12-997` (receive).
+- App settings: `X12SendAgreementName` = `Supplier-Purchaser-X12-997` (encode only). `X12ReceiveAgreementName` is **redundant** (Decode auto-resolves) and may be dropped.
+
+**Root cause of the split:** `functionalGroupId` (GS01 on an Azure X12 agreement) is a **scalar field** — it cannot be `PO` (850 purchase order) and `FA` (997 functional acknowledgment) simultaneously. A single bidirectional X12 agreement is architecturally impossible when two transaction types require different GS01 codes. This constraint also applies to `docs/supplier-workflow-epic-design.md §3.1–3.2` (stale — reflects the pre-split design; Mal to update or add addendum).
+**References:** `infra/integration-account/ia-content-supplier.bicep`, `infra/integration-account/ia-content.bicep`
+
+---
+
+### Epic architecture and flow (Mal)
+**By:** Mal
+**What:** Locked the application-layer contract for the supplier-inbound + 997-return round-trip:
+- **`supplier-inbound-ack`** (kept `manual` trigger): AS2 Decode (signed sync MDN returned immediately after Decode — before downstream — so purchaser POST completes even if downstream fails) → X12 Decode 850 (auto-resolves receive agreement from ISA/GS, no agreementName param) → two branches run after decode: (a) **persist branch** — Transform XML → Parse Canonical → Normalize Lines → `sup.usp_UpsertPurchaseOrder`; (b) **997 branch** — Build 997 XML → X12 Encode 997 → AS2 Encode → POST to `@appsetting('Purchaser997EndpointUrl')` (+ `Record_997_Send_Failure` on FAILED/TIMEDOUT).
+- **`purchaser-inbound-997`** (new `manual` trigger): AS2 Decode → MDN → X12 Decode 997 → `Record_997_Status` (tracked properties).
+- Purchaser and supplier remain distinct apps / UAMIs / IAs / regions; cross-boundary = two AS2 POSTs only.
+- Callback-URL deadlock broken by the non-interleaved dual-injection sequence (lock #4).
+
+**App settings — supplier:** `WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL` (KV-ref, links IA), `Purchaser997EndpointUrl` (KV-ref → `purchaser-997-endpoint-url`), `X12SendAgreementName` = `Supplier-Purchaser-X12-997`.
+**App settings — purchaser receive:** no new outbound setting; AS2/X12 Decode auto-resolve from linked purchaser IA.
+**Why:** Delivers the acknowledgment leg deferred by the send epic while preserving the two-app identity model.
+**References:** `docs/supplier-workflow-epic-design.md`, `logicapps/supplier/workflows/supplier-inbound-ack/workflow.json`, `logicapps/purchaser/workflows/purchaser-inbound-997/workflow.json`
+
+---
+
+### 997 functional acknowledgment: structure, envelope, and control numbers (Simon)
+**By:** Simon
+**What:**
+- **Structure (happy path, single accepted 850):** `ST · AK1 · AK2 · AK5 · AK9 · SE`. `AK3`/`AK4` loops appear only for rejected sets.
+- **Control-number relationships (non-negotiable):**
+  - **Echo values (copied from received 850 into 997 body):** `AK102` ← 850 GS06; `AK202` ← 850 ST02; `AK101` ← 850 GS01 (`PO`); `AK201` ← 850 ST01 (`850`).
+  - **Owning values (agreement-generated by supplier→purchaser X12 send agreement):** 997's own ISA13/GS06/ST02 — rollover enabled, independent of the 850's numbers.
+- **997 envelope:** Supplier = sender (`SUPPLIER01`), Purchaser = receiver (`PURCHASER01`); GS01=`FA`; ISA12=`00603`; GS08=`006030`; same delimiters (`*`/`>`/`~`) as the 850. GS01=`FA` is mandatory — the send agreement `functionalGroupId` must be `FA` (not `PO`).
+- **Purchaser receive agreement** (`Purchaser-Supplier-X12-997`): set `acknowledgementSettings.needFunctionalAcknowledgement:false` — do NOT ACK an ACK.
+- **Schema artifact:** `X12_00603_997.xsd` (31 KB), inline via `loadTextContent` on both IAs (no REST contentLink needed). Root `X12_00603_997`, BizTalk namespace identical to 850; same global/local namespace split.
+
+**Why:** Envelope/control-number correctness is non-negotiable; wrong echo values in AK102/AK202 cause silent validation failures at the purchaser.
+**References:** `infra/integration-account/schemas/X12_00603_997.xsd`, `infra/integration-account/ia-content-supplier.bicep`, `infra/integration-account/ia-content.bicep`
+
+---
+
+### X12 Decode auto-resolves receive agreement — no `agreementName` param (Wash, verified)
+**By:** Wash (verified against MS Learn `logic-apps-enterprise-integration-x12`)
+**What:** The built-in `x12Decode` operation takes **only** `messageToDecode` (required) and `b2bTrackingId` (optional). There is **no** `agreementName` parameter on Decode — the runtime resolves the receive agreement automatically from ISA/GS envelope identifiers via the linked Integration Account. Contrast: X12 **Encode** (`x12Encode`) **does** expose `agreementName`.
+
+**Consequence:** The `X12ReceiveAgreementName` app setting (`Supplier-Purchaser-X12-850`) is unused by the workflow — it cannot be referenced in the Decode action. Kaylee may drop it in a follow-up (harmless surplus).
+**Why:** Confirmed from the Learn parameter table for `x12Decode` (no agreementName listed) and from the Decode description: "validates the envelope against trading partner agreement" (i.e., resolves by partner identities, not a supplied name).
+**References:** `logicapps/supplier/workflows/supplier-inbound-ack/workflow.json`, `infra/compute/logicapp-bundle.bicep`
+
+---
+
+### Receive-side XSLT map: X12 850 006030 → PO canonical (Simon)
+**By:** Simon
+**What:**
+- **Path:** `logicapps/supplier/Artifacts/Maps/X12_850_006030_to_PO_Canonical.xslt` (exact inverse of purchaser send map).
+- **Input:** decoded X12 850 XML from X12 Decode (root `x12:X12_00603_850`, BizTalk mixed-namespace: global segments `x12:`-prefixed, local data fields unqualified).
+- **Output:** canonical `<purchaseOrder>` XML (no namespace); `<lines>` is the **repeating element itself** (one `<lines>` per PO1Loop1; no `<line>` child wrapper). Downstream `json()` yields a `lines` array for N>1, an object for N=1 → Normalize_Lines guard required (see next entry).
+- **`OPENJSON` column contract:** `lineNumber / sku / description / quantity / uom / unitPrice` (camelCase; matches `sup.usp_UpsertPurchaseOrder`).
+- **4 documented gaps** (fields absent from the 850 wire, all have NOT NULL mirrored columns): G1 `currency`=`USD` (constant); G2 `buyer/name`=buyer/id (no N1\*BY on wire); G3 `seller/id`=Wash overrides from envelope GS03; G4 `seller/name`=`SUPPLIER01` constant. Fallbacks keep `sup.*` NOT NULL constraints satisfied without relaxing DDL.
+- **Verification:** XSLT 1.0 compile PASS; direct transform PASS; full inverse round-trip PASS (all recoverable fields identical; 4 gaps surface as documented fallbacks).
+**Why:** Enables supplier to persist received POs in the `sup` schema with a documented audit trail for unmappable fields.
+**References:** `logicapps/supplier/Artifacts/Maps/X12_850_006030_to_PO_Canonical.xslt`, `infra/sql/schema/040-usp-upsert-supplier.sql`
+
+---
+
+### `<lines>` repeating-element + Normalize_Lines fix (Simon, Wash, Jayne)
+**By:** Wash (implemented), Simon (identified root cause), Jayne (fixtures)
+**What:** Simon's map emits `<lines>` as the repeating element (one per PO1Loop1). When `json()` processes canonical XML with a **single** `<lines>` element, it collapses to a JSON **object** (not array). `OPENJSON(@LinesJson)` requires a JSON array → single-item POs silently write 0 lines to SQL.
+
+**Fix:** `Normalize_Lines` Compose action inserted between `Parse_Canonical` and `Persist_Purchase_Order`:
+```
+@if(startsWith(string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']), '['),
+    outputs('Parse_Canonical')?['purchaseOrder']?['lines'],
+    array(outputs('Parse_Canonical')?['purchaseOrder']?['lines']))
+```
+`LinesJson = @{string(outputs('Normalize_Lines'))}` — always a JSON array.
+
+**Test requirement:** `purchase-order-1line.json` exercises the `array()` wrap path; `purchase-order-3line.json` exercises the pass-through. **Both paths must be tested** — fixing one can silently break the other, and the failure mode (0 SQL lines for a 1-line PO) does not raise a workflow error.
+**Why:** `json()` single-occurrence XML element collapse is a known Logic Apps WDL behavior; the guard makes persist correct for all line counts ≥ 1.
+**References:** `logicapps/supplier/workflows/supplier-inbound-ack/workflow.json`, `samples/purchase-order-1line.json`, `samples/purchase-order-3line.json`
+
+---
+
+### Infrastructure: Bicep, SQL, CI (Kaylee)
+**By:** Kaylee
+**What:**
+- **`ia-content-supplier.bicep`** is a separate Bicep module for supplier IA content (supplier IA is in `rg-edi-supplier`/Central US; purchaser in `rg-edi-purchaser`/East US 2 — cannot share one template; one-IA-per-module boundary preserved).
+- **997 schema inline** (`loadTextContent('schemas/X12_00603_997.xsd')`, 31 KB, both IA modules); **850 schema via REST contentLink** on supplier IA (mirrors purchaser mechanism; 2.15 MB, same deploy.yml CI step pattern).
+- **`sup` DDL:** `infra/sql/schema/030-sup-tables.sql` (mirrors `dbo` shape); `infra/sql/schema/040-usp-upsert-supplier.sql` (`sup.usp_UpsertPurchaseOrder`, OPENJSON `@LinesJson`, `CREATE OR ALTER`, idempotent on PoNumber). `create-users-roles.sql` extended: REVOKE `SCHEMA::dbo` from `SupplierRole` + GRANT `SCHEMA::sup`.
+- **Supplier app settings:** `WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL` (KV-ref), `Purchaser997EndpointUrl` (KV-ref), `X12SendAgreementName` = `Supplier-Purchaser-X12-997`, `X12ReceiveAgreementName` = `Supplier-Purchaser-X12-850` (harmless surplus; Decode doesn't use it).
+- **Graceful cert-state guards:** `supplierEdiReady` flag (all 4 leaf certs present) gates supplier IA content deploy + purchaser AS2 receive activation + 997 injection. Infra-only runs stay green (mirrors existing `ediReady` pattern).
+- **Build validation:** `az bicep build` exit 0 on `main.bicep`, `ia-content.bicep`, `ia-content-supplier.bicep`, `logicapp-bundle.bicep`; `az bicep lint` clean; `deploy.yml` YAML parse clean.
+**Why:** Follows established one-IA-per-module and cert-guard patterns; keeps CI idempotent across cert-gen states.
+**References:** `infra/integration-account/ia-content-supplier.bicep`, `infra/sql/schema/030-sup-tables.sql`, `infra/sql/schema/040-usp-upsert-supplier.sql`, `.github/workflows/deploy.yml`
+
+---
+
+### Cert bindings confirmed + RBAC (Kaylee / Zoe)
+**By:** Kaylee (implemented), Zoe (verified)
+**What:** All four leaf certs now active across both IAs. Rule: private cert = public cert body + KV key reference (own IA); public cert = body only (counterparty IA).
+- **Supplier IA receive:** signing=`purchaser-signing` (public, verify inbound sig), encryption=`supplier-encryption` (private, decrypt).
+- **Supplier IA send:** signing=`supplier-signing` (private, sign 997 + MDN), encryption=`purchaser-encryption` (public, encrypt 997).
+- **Purchaser IA receive** (activated this epic): signing=`supplier-signing` (public, verify), encryption=`purchaser-encryption` (private, decrypt).
+- **No new RBAC edge.** The three new private-cert KV key refs resolve through the existing Azure Logic Apps first-party SP (`7cd684f4-8a78-49b0-91ec-6a35d38739ba`) vault-scoped grant (KV Crypto User + Secrets User on the shared vault, `targetResourceId: keyVaultId`). `infra/rbac/role-assignments.bicep` is unchanged.
+- **`overrideGroupSigningCertificate: true`** on both receive blocks — MDN signing cert resolved from host partner send-block at runtime (RUNTIME-VERIFY advisory L1; security-safe regardless: failure mode is a functional MDN defect, not a trust boundary breach).
+- **Advisory L2 (accepted demo posture):** `ignoreCertificateNameMismatch: true`, CRL/OCSP disabled on all AS2 agreement blocks — conscious choice for a self-signed demo; revisit for prod hardening.
+**Why:** Correct PKI: private keys never leave their owner's IA; only public certs cross IA boundaries.
+**References:** `infra/integration-account/ia-content-supplier.bicep`, `infra/integration-account/ia-content.bicep`, `infra/rbac/role-assignments.bicep`
+
+---
+
+### Workflow implementation decisions (Wash)
+**By:** Wash
+**What:**
+- **MDN returned immediately** after AS2 Decode (before persist or 997 processing) — purchaser `POST_AS2_to_supplier` completes 200 regardless of downstream outcome. 997 is a separate AS2 POST, not part of the MDN.
+- **997 generation:** explicit Build_997_Xml Compose → X12 Encode (agreement `@appsetting('X12SendAgreementName')`). 997 XML root `X12_00603_997`; AK501=`A`, AK901=`A` for the accepted happy path.
+- **No Service Bus lock** on this path; visibility via `trackedProperties` + `Record_997_Send_Failure` (runAfter FAILED/TIMEDOUT). `trackedProperties` reference only their own action's output (repo rule respected); cross-action refs allowed in inputs.
+- **997 control-number positional parse from decoded 850 flat file** (HEALTH-CHECK HC-1): `AK102 = split(split(flatFile,'~')[1],'*')[6]` (GS06), `AK202 = split(split(flatFile,'~')[2],'*')[2]` (ST02). Relies on LOCKED delimiters (`*`=42, `~`=126) and single-ISA/GS/ST interchange (demo case). Multi-set batches need a loop.
+- **Seller id override from GS03** (HEALTH-CHECK HC-3-adjacent): `trim(split(split(flatFile,'~')[1],'*')[3])` with `coalesce` fallback to map constant — resolves Simon gap G3.
+- **`connections.json`** corrected: SQL + SB migrated to verified managed-identity shape (`parameterSetName:'ManagedServiceIdentity'`, `serverName`/`databaseName`, `authProvider.Type`). AS2/X12 built-in — no `connections.json` entry needed.
+- **Health-check flags (runtime-verify pending):** HC-1 (positional AK parse), HC-2 (`goodMessages[0].body` accessor — NOT Learn-documented, highest-risk), HC-3 (AS2 v2 output casing `messageHeaders`/`messageContent.$content`), HC-4 (MDN signing cert), HC-5 (Normalize_Lines both paths), HC-6 (`outgoingMdnContent` shape).
+**References:** `logicapps/supplier/workflows/supplier-inbound-ack/workflow.json`, `logicapps/purchaser/workflows/purchaser-inbound-997/workflow.json`, `logicapps/supplier/connections.json`
+
+---
+
+### Security sign-off (Zoe)
+**By:** Zoe
+**Verdict: ✅ SIGN-OFF — no BLOCKERs.**
+All five areas PASS: cert bindings correct (no embedded private key material); MDN-signing nuance is runtime-verify/non-blocking; RBAC no new edge, least-privilege intact, `SupplierRole` `sup`-only; managed identity everywhere (SQL + SB `ManagedServiceIdentity`, AS2/X12 native in-app, all KV refs via UAMI); no secret leakage in committed files (callback URLs CI-generated into KV at deploy time, never echoed; SAS for 850 contentLink is runtime-only shell var, never committed).
+**References:** `infra/rbac/role-assignments.bicep`, `infra/integration-account/ia-content-supplier.bicep`, `infra/integration-account/ia-content.bicep`
+
+---
+
+### QA decisions (Jayne)
+**By:** Jayne
+**What:**
+- **New sample fixtures:** `samples/purchase-order-1line.json` (1 line — exercises `array()` wrap in Normalize_Lines) + `samples/purchase-order-3line.json` (3 lines — exercises pass-through). `samples/validate-json.py` extended for both; exit 0 confirmed.
+- **6 runtime health-checks** documented in `docs/supplier-roundtrip-test-plan.md §4` (HC-1 to HC-6; see Wash FLAGS above). **HC-2** (`goodMessages[0].body` accessor) is the highest-risk unverified item: if wrong, the entire supplier-side business processing silently fails.
+- **Idempotency test included:** republish same PO fixture → confirm exactly 1 row in `sup.PurchaseOrder` (tests the `IF @PurchaseOrderId IS NULL` guard in `sup.usp_UpsertPurchaseOrder`).
+- **`transform-and-validate.ps1` not yet extended** for the supplier map (deferred until first green supplier run exports a decoded-850 XML sample).
+- **Offline-only:** JSON schema validation (confirmed). **Runtime-only:** all action-level PASS criteria, SQL assertions, negative tests N-4/N-5.
+**References:** `samples/purchase-order-1line.json`, `samples/purchase-order-3line.json`, `docs/supplier-roundtrip-test-plan.md`
+
+---
+
+### Documentation decisions (Book)
+**By:** Book
+**What:**
+- `docs/supplier-workflow-runbook.md` **created as a separate file** (not merged into purchaser runbook — distinct app, region, app settings, SQL tables, and run procedure; cross-link from purchaser runbook maintains discoverability).
+- `docs/end-to-end-flow.md` updated: dual status header (purchaser send = live-verified; supplier receive = authored/not-deployed), new §2 with full Mermaid + action table for supplier receive + purchaser-inbound-997.
+- `docs/trading-partner-onboarding.md` updated: all 4 leaf cert bindings, combined send+receive deploy sequence, supplier IA partners/agreements (§10–§14), `sup` SQL schema (§14).
+- `docs/purchaser-workflow-runbook.md` updated: forward cross-link to `supplier-workflow-runbook.md`.
+**References:** `docs/supplier-workflow-runbook.md`, `docs/end-to-end-flow.md`, `docs/trading-partner-onboarding.md`
+
+---
+
+### New Hard-won pitfalls (2026-07-21 additions — supplier inbound + 997 epic)
+- **X12 Decode auto-resolves the receive agreement — do NOT add an `agreementName` param.** Built-in `x12Decode` takes only `messageToDecode` (required) and `b2bTrackingId`. Contrast: `x12Encode` DOES take `agreementName`. Any `X12ReceiveAgreementName` app setting is unused by the runtime.
+- **A single bidirectional X12 agreement cannot serve two transaction types that require different GS01 codes.** `functionalGroupId` is scalar: 850 needs `PO`, 997 needs `FA`. Split into separate agreements (one per transaction type per direction). Attempting a single agreement will silently encode with the wrong GS01 or fail envelope matching.
+- **`json()` on a single-occurrence XML element collapses it to an object, not a 1-element array.** When a canonical map emits a repeating element (e.g., `<lines>`) and a PO has only one line, `json()` returns an object. `OPENJSON` requires a JSON array — writes 0 rows silently. Always guard: `if(startsWith(string(...), '['), <passthrough>, array(<object>))`.
+- **997 control numbers — echo vs. own:** `AK102` ← received GS06 and `AK202` ← received ST02 are ECHO values (link the 997 back to the original 850 group/transaction). The 997's own ISA13/GS06/ST02 are agreement-generated and independent. Conflating the two sets produces a 997 the purchaser cannot match to the received 850.
+- **X12 Decode built-in auto-generates only 4010-compliant 997 ACKs**, even when the source interchange is 006030. For version-consistent 006030 acknowledgments, use explicit X12 Encode with a separate 997 send agreement (`functionalGroupId:'FA'`, schema `X12_00603_997`, `groupHeaderVersion:'006030'`).
+
