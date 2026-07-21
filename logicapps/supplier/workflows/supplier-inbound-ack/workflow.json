@@ -135,11 +135,19 @@
         },
         "inputs": "@json(body('Transform_850_to_PO_Canonical'))"
       },
-      "Persist_Purchase_Order": {
-        "type": "ServiceProvider",
-        "description": "Normalized persist into the supplier-owned 'sup' schema via [sup].[usp_UpsertPurchaseOrder] (built-in SQL, managed identity, idempotent on PoNumber). The built-in SQL connector cannot pass a table-valued parameter, so line items are passed as a JSON string (LinesJson) for the proc to shred with OPENJSON (verified pattern, decisions.md).",
+      "Normalize_Lines": {
+        "type": "Compose",
+        "description": "json(xml) collapses a single repeated <line> element to a JSON object instead of a one-element array, which would break OPENJSON(@LinesJson) in the proc. Force lines to ALWAYS be a JSON array: if lines/line already serializes as an array (starts with '['), pass it through; otherwise wrap the single object with array(). Handles both 1-line and N-line POs. Address groups (buyer/seller/shipTo/billTo) are always singular scalars, so they need no normalization.",
         "runAfter": {
           "Parse_Canonical": ["SUCCEEDED"]
+        },
+        "inputs": "@if(startsWith(string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line']), '['), outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line'], array(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line']))"
+      },
+      "Persist_Purchase_Order": {
+        "type": "ServiceProvider",
+        "description": "Normalized persist into the supplier-owned 'sup' schema via [sup].[usp_UpsertPurchaseOrder] (built-in SQL, managed identity, idempotent on PoNumber). The built-in SQL connector cannot pass a table-valued parameter, so line items are passed as a JSON array string (LinesJson from Normalize_Lines) for the proc to shred with OPENJSON (verified pattern, decisions.md). SellerId is overridden from the 850 envelope GS03 (application-receiver = supplier) since the map emits a constant (Simon G3); SellerName has no envelope source and keeps the map value.",
+        "runAfter": {
+          "Normalize_Lines": ["SUCCEEDED"]
         },
         "inputs": {
           "parameters": {
@@ -151,7 +159,7 @@
               "Currency": "@outputs('Parse_Canonical')?['purchaseOrder']?['currency']",
               "BuyerId": "@outputs('Parse_Canonical')?['purchaseOrder']?['buyer']?['id']",
               "BuyerName": "@outputs('Parse_Canonical')?['purchaseOrder']?['buyer']?['name']",
-              "SellerId": "@outputs('Parse_Canonical')?['purchaseOrder']?['seller']?['id']",
+              "SellerId": "@{coalesce(trim(split(split(outputs('Decoded_850_FlatFile'),'~')[1],'*')[3]), string(outputs('Parse_Canonical')?['purchaseOrder']?['seller']?['id']))}",
               "SellerName": "@outputs('Parse_Canonical')?['purchaseOrder']?['seller']?['name']",
               "ShipToName": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['name']",
               "ShipToLine1": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['line1']",
@@ -167,7 +175,7 @@
               "BillToState": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['state']",
               "BillToPostalCode": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['postalCode']",
               "BillToCountry": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['country']",
-              "LinesJson": "@{string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line'])}"
+              "LinesJson": "@{string(outputs('Normalize_Lines'))}"
             }
           },
           "serviceProviderConfiguration": {
