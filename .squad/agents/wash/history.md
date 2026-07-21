@@ -30,3 +30,5 @@
 **IaC status:** These two topic-scoped assignments were applied out-of-band with `az role assignment create` and are not currently expressed in Bicep. `infra/rbac/role-assignments.bicep` currently expresses namespace-scoped purchaser sender and supplier receiver assignments, so Kaylee should fold the purchaser receiver assignment and any desired dev-test publisher assignment model into Bicep/runbook without broadening scope.
 
 **Propagation:** Azure RBAC propagation can take 1-5+ minutes after assignment creation before Service Bus data-plane operations succeed., not assumed legacy accessors.
+
+📌 Team update (2026-07-21T09:15:00-05:00): Hard-won SB settlement pattern: use a matched Service Bus V2 topic trigger/settle set (peekLockTopicMessagesV2, completeTopicMessageV2, deadLetterTopicMessageV2) with topicName + subscriptionName + lockToken; V2 settle needs a concrete FQN and may ignore serviceBus__fullyQualifiedNamespace; pin uthProvider.Identity in connections.json or settlement can fall back to a stray system-assigned identity and fail AADSTS700016. — decided by Coordinator

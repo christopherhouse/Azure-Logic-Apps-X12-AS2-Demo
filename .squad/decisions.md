@@ -1064,248 +1064,6 @@ Both apps have this `host.json` deployed at the app root. Runtime resolved:
 
 There are no `AzureFunctionsJobHost__extensionBundle__*` app-setting overrides on either app.
 
-### Verification result
-
-The failure path still fails at `Dead_Letter_Message`, but the VNet-private-ports remediation is now recorded as the wrong fix for this topology:
-
-`VNetPrivatePortsNotConfigured`: using this service provider action in stateful workflows requires **VNet integration** and `siteConfig.vnetPrivatePortsCount >= 2`.
-
-Microsoft Learn grounding did not identify a minimum Workflows extension bundle version for Service Bus `completeMessage` / `deadLetterMessage`, and the loaded bundle is present and in the configured range. The stronger evidence is the current Service Bus built-in connector reference: for topic subscriptions, the current settlement operation IDs are `completeTopicMessageV2` and `deadLetterTopicMessageV2`, with required `topicName`, `subscriptionName`, and `lockToken` parameters. The workflow currently uses older/generic operation IDs `completeMessage` and `deadLetterMessage` with only `lockToken`.
-
-Best hypothesis: settlement is not a host/bundle deployment problem; it is a workflow action shape/operationId problem. The current operation IDs appear to route to the stateful-affinity path that emits the misleading VNet-private-ports error in a non-VNet app. The likely workflow fix is to switch settlement to the documented topic-subscription V2 operations:
-
-- `completeTopicMessageV2`
-- `deadLetterTopicMessageV2`
-- include `topicName = purchase-orders.received`
-- include `subscriptionName = all-messages`
-- keep `lockToken = @triggerBody()?['lockToken']`
-
-This should be routed to Wash because it is a workflow definition change.
-
-## Reproducibility notes
-
-- Schema registration is already covered by `.github/workflows/deploy.yml` in the step `Post-Deploy - Register X12 schema via REST contentLink (>2 MB)`.
-- The subsequent IA content deployment is also covered by `.github/workflows/deploy.yml`.
-- No Bicep edit is needed for the large schema because the REST `contentLink` path is intentional.
-- Do **not** persist `vnetPrivatePortsCount = 2`; it was reverted to `0` and is not applicable without VNet integration.
-
-## Reference-app comparison update — 2026-07-20T10:58:00-05:00
-
-Christopher provided working reference Logic App Standard app:
-
-`/subscriptions/8bd05b2f-62c5-4def-9869-f0617ebb3970/resourceGroups/RG-CLARIOS-AIS/providers/Microsoft.Web/sites/la-clarios-ais`
-
-Key confirmed differences versus `logic-jci-purchaser-dev`:
-
-- Reference has **no VNet** and `siteConfig.vnetPrivatePortsCount = 0`, confirming private ports are not required for this topology.
-- Reference has identity type `SystemAssigned, UserAssigned`; purchaser originally had only `UserAssigned`.
-- Reference Service Bus `connections.json` uses:
-  - `parameterSetName = ManagedServiceIdentity`
-  - `fullyQualifiedNamespace = @appsetting('serviceBus_fullyQualifiedNamespace')`
-  - `authProvider.Type = ManagedServiceIdentity`
-  - no explicit `authProvider.Identity`
-- Reference `host.json` includes the same Workflows extension bundle range plus:
-  - `Runtime.ApplicationInsightTelemetryVersion = v2`
-  - `Runtime.ApplicationInsights.PreserveIncomingOperationId = true`
-- Reference workflow uses topic-subscription V2 Service Bus operations:
-  - trigger `peekLockTopicMessagesV2`
-  - settlement `completeTopicMessageV2`
-  - failure handling uses topic V2 settlement (`abandonTopicMessageV2` in reference; purchaser uses `deadLetterTopicMessageV2`)
-  - parameters include `topicName`, `subscriptionName`, and `lockToken`.
-
-Applied live/repo changes on branch `bugfix/edi-e2e-live-fixes`:
-
-- Added purchaser runtime settings to match reference where applicable:
-  - `AzureFunctionsJobHost__extensionBundle__id = Microsoft.Azure.Functions.ExtensionBundle.Workflows`
-  - `AzureFunctionsJobHost__extensionBundle__version = [1.*, 2.0.0)`
-  - `FUNCTIONS_INPROC_NET8_ENABLED = 1`
-  - `WEBSITE_NODE_DEFAULT_VERSION = ~20`
-  - siteConfig `.NET v8.0`, 64-bit worker
-- Added single-underscore Service Bus app setting:
-  - `serviceBus_fullyQualifiedNamespace = sb-jci-edi-dev-2vjolmqq.servicebus.windows.net`
-- Enabled purchaser system-assigned managed identity and granted it `Azure Service Bus Data Receiver` on namespace `sb-jci-edi-dev-2vjolmqq`.
-- Changed `logicapps/purchaser/connections.json` Service Bus block to match the reference system-assigned MI shape (`authProvider.Type` only).
-- Changed purchaser workflow Service Bus operations to the topic V2 operation IDs and parameters.
-- Matched reference trigger metadata and host telemetry setting.
-
-Relevant commits now on `bugfix/edi-e2e-live-fixes`:
-
-- `4a9b32e` — use Service Bus topic V2 settlement
-- `29d7c31` — align Service Bus FQN setting with V2 connector
-- `ad5d1b0` — use system identity for Service Bus
-- `311bab3` — match reference Service Bus trigger metadata
-
-Verification:
-
-- Purchaser hostruntime is `Running`; workflow `purchaser-po-to-as2` is `Healthy`.
-- Live `connections.json` at app root matches the final reference-aligned shape.
-- Earlier V2 runs advanced past the original misleading `VNetPrivatePortsNotConfigured` and then exposed the true identity selection problem (`Unable to load the proper Managed Identity`), which is why the system-assigned identity/reference shape was applied.
-- After the system-assigned identity/reference-shape deploy, the Service Bus trigger has not yet picked up new active subscription messages during the verification window (`activeMessageCount = 2`, `deadLetterMessageCount = 10`). No new workflow run was created after `18:26:50Z`; App Insights showed no new trigger/listener errors after the latest deploy. This may be RBAC/host listener propagation after identity changes, but it is not yet proven GREEN.
-
-Current status:
-
-- **Bug E remains BLOCKED**: `X12_00603_850` is registered and visible; agreement references are correct; latest verified runs still fail `Encode_to_X12_850` with `EdiMatchingSchemaNotFound`. The schema-registration hypothesis is disproven.
-- **Bug F is partially remediated but not yet GREEN**: VNet/private-ports was incorrect and reverted; reference-app diff points to topic V2 operations plus system-assigned MI. Those changes are applied, but a fresh settlement run has not yet been observed after the final deploy.
-
-## Stabilization correction — 2026-07-20T14:13:08.276-05:00
-
-Christopher approved rolling back the speculative Service Bus V2/identity rewiring. I restored `logicapps/` to known-good commit `32efe61` and committed:
-
-- `0d98c41` — `revert speculative SB V2/identity rewiring to known-good 32efe61`
-
-I redeployed `logicapps/purchaser` from that restored known-good state. Purchaser host is `Running`; workflow `purchaser-po-to-as2` is `Healthy`. The trigger is working again: fresh runs appeared after publishing PO messages.
-
-Live rollback notes:
-
-- Removed the Service Bus Data Receiver role assignment that I had granted to the system-assigned principal.
-- Removed reference-mimic settings:
-  - `AzureFunctionsJobHost__extensionBundle__id`
-  - `AzureFunctionsJobHost__extensionBundle__version`
-  - `FUNCTIONS_INPROC_NET8_ENABLED`
-  - `serviceBus_fullyQualifiedNamespace`
-  - `serviceBus__managedIdentityResourceId`
-- Restored:
-  - `WEBSITE_NODE_DEFAULT_VERSION = ~22`
-  - `siteConfig.netFrameworkVersion = v4.0`
-  - `siteConfig.use32BitWorkerProcess = true`
-- Left the corrected identity-based `AzureWebJobsStorage__*` settings intact.
-- Azure did not accept removing the system-assigned identity cleanly; the current system-assigned principal has no Service Bus Data Receiver assignment. The restored known-good `connections.json` and trigger are working.
-
-Applied Simon's real Bug E fix in `infra/integration-account/ia-content.bicep`: removed `senderApplicationId: 'PURCHASER01'` from the X12 **sendAgreement** `schemaReferences` only. Committed:
-
-- `0b6d93e` — `fix(ia): relax X12 send schema matching`
-
-Redeployed IA content live. Verified send agreement schema reference is now only:
-
-```json
-[
-  {
-    "messageId": "850",
-    "schemaName": "X12_00603_850",
-    "schemaVersion": "00603"
-  }
-]
-```
-
-Verification run `08584170312716986831403343499CU00`:
-
-- `Parse_Purchase_Order`: `Succeeded / OK`
-- `Persist_Purchase_Order`: `Succeeded / OK`
-- `Compose_Canonical_Xml`: `Succeeded / OK`
-- `Transform_to_X12_850_Xml`: `Succeeded / OK`
-- `Encode_to_X12_850`: `Succeeded / OK` — Bug E fixed.
-- `Encode_to_AS2`: `Succeeded / OK`
-- `POST_AS2_to_supplier`: `Failed / BadRequest` before HTTP send because `@appsetting('SupplierAs2Endpoint__url')` resolved null even though the Key Vault reference status is `Resolved`.
-- Settlement remains out of scope and still fails on the failure path.
-
-Real `Encode_to_AS2` output shape from the run:
-
-- top-level `body`
-- `body.messageContent`
-  - `$content-type = application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"`
-  - `$content = <base64 PKCS7 payload>`
-- `body.messageHeaders`
-  - `Content-Type`
-  - `AS2-From`
-  - `AS2-To`
-  - `AS2-Version`
-  - `Message-ID`
-  - `EDIINT-Features`
-  - `Disposition-Notification-To`
-  - `Disposition-Notification-Options`
-  - `Content-Transfer-Encoding`
-  - `Mime-Version`
-- `body.messageId`
-- `body.agreementName`
-- `body.senderPartnerName`
-- `body.receiverPartnerName`
-- `body.micHash`
-- `body.isMessageCompressed`
-- `body.isMessageEncrypted`
-- `body.isMessageSigned`
-- `body.isMdnExpected`
-- `body.mdnType`
-
-The existing `POST_AS2_to_supplier` accessors (`as2Message.outboundHeaders` / `as2Message.content`) do not match this real shape; that is now the next workflow accessor issue after Bug E.
-
-## Supplier endpoint URL stabilization — 2026-07-20T14:32:58.592-05:00
-
-Bounded check/fix for `SupplierAs2Endpoint__url` after run `08584170312716986831403343499CU00` reported a null URI.
-
-Findings:
-
-- Purchaser app setting `SupplierAs2Endpoint__url` is present:
-  - `@Microsoft.KeyVault(SecretUri=https://kv-jci-edi-dev-2vjolmqq.vault.azure.net/secrets/supplier-as2-endpoint-url)`
-- App Service Key Vault reference status is `Resolved` using `identityType = UserAssigned`.
-- Purchaser UAMI `id-jci-purchaser-dev` has `Key Vault Secrets User` at resource group scope `/subscriptions/8bd05b2f-62c5-4def-9869-f0617ebb3970/resourcegroups/rg-edi-shared`.
-- Key Vault secret `supplier-as2-endpoint-url` value exactly matches the live supplier workflow callback URL returned from:
-  - `logic-jci-supplier-dev`
-  - workflow `supplier-inbound-ack`
-  - trigger `manual`
-
-Action:
-
-- Re-set `SupplierAs2Endpoint__url` to the Key Vault reference for `supplier-as2-endpoint-url`.
-- Refreshed App Service Key Vault references through the configreferences refresh API.
-
-Post-refresh evidence:
-
-- `SupplierAs2Endpoint__url` remains present as the Key Vault reference.
-- Config reference status remains `Resolved`.
-- Secret value/current callback URL:
-  - `https://logic-jci-supplier-dev.azurewebsites.net:443/api/supplier-inbound-ack/triggers/manual/invoke?api-version=2022-05-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=iHUMi7SX-p2oYAQGEgXPjvpxWsSRxoosQmIF7e7BZCc`
-
-Conclusion:
-
-- The setting was not missing, clobbered, stale, or blocked by Key Vault RBAC.
-- It is now refreshed and confirmed resolved to the current supplier trigger URL.
-
-# 2026-07-20T12:08:28.826-05:00 — Purchaser built-in SQL managed-identity connection fix
-
-**By:** Kaylee (Infra / DevOps Engineer)  
-**Requested by:** Christopher House  
-**Scope:** Purchaser Logic App Standard built-in SQL connection, live verification, and repo persistence for the app artifact.
-
-## Root cause
-
-`Persist_Purchase_Order` failed with:
-
-`ServiceOperationFailed: Value cannot be null. (Parameter 'Data Source')`
-
-The SQL built-in service-provider connection used the correct `ManagedServiceIdentity` parameter set names, but `serverName` and `databaseName` were supplied as `@appsetting(...)` expressions:
-
-- `serverName: @appsetting('sql__serverFqdn')`
-- `databaseName: @appsetting('sql__databaseName')`
-
-In the live SQL operation-group manifest, the SQL `ManagedServiceIdentity` connection parameters `serverName`, `databaseName`, `managedIdentityType`, and `managedIdentityClientId` have `parameterSource = NotSpecified`; only the connection-string auth parameter set uses `parameterSource = AppConfiguration`. By contrast, the Service Bus built-in `fullyQualifiedNamespace` has `parameterSource = AppConfiguration`, which is why the Service Bus `@appsetting(...)` pattern works here but SQL's server/database values resolved to null at runtime.
-
-## Correct SQL MI binding shape verified
-
-For this Workflows extension bundle, the SQL built-in managed-identity connection must provide concrete SQL connection parameters in `connections.json`:
-
-```json
-"sql": {
-  "parameterSetName": "ManagedServiceIdentity",
-  "parameterValues": {
-    "serverName": "sql-jci-edi-dev-2vjolmqq.database.windows.net",
-    "databaseName": "sqldb-jci-edi-dev",
-    "managedIdentityType": "UserAssigned",
-    "managedIdentityClientId": "8a2d2355-ec3a-421f-ab1d-50ea89f15f83",
-    "authProvider": {
-      "Type": "ManagedServiceIdentity"
-    }
-  },
-  "serviceProvider": {
-    "id": "/serviceProviders/sql"
-  },
-  "displayName": "SQL Database (Managed Identity)"
-}
-```
-
-No `sql__credential` app setting was required for the verified fix.
-
-## What changed
-
 ### Repo
 
 Updated `logicapps/purchaser/connections.json` to use the concrete SQL server, database, purchaser UAMI type, and purchaser UAMI clientId in the SQL built-in connection.
@@ -2353,4 +2111,203 @@ live system-assigned identity (`identity.type` before `SystemAssigned, UserAssig
 **Conclusion:** IaC now reproduces the current working live state for all persisted items; a CI redeploy will
 not revert the storage-identity settings, the clean supplier-endpoint setting, telemetry, the IA send-schema
 relaxation, or the purchaser topic Data Receiver grant.
+
+### 2026-07-20T14:45:00-05:00: Book Step 4 docs/runbook complete
+
+**By:** Book (Technical Writer)
+
+**What:** Step 4 documentation/runbook work completed and pushed in commit `8b04bb4` on `bugfix/edi-e2e-live-fixes`, updating PR #11. End-to-end purchaser PO → X12 850 → AS2 → supplier HTTP 200 was verified live for steps 1-4; PR #11 remains open and unmerged.
+
+**Why:** The team needed current operator-facing documentation for the live EDI/AS2 demo and a record of remaining owner-confirmed TBDs before coordinator handoff.
+
+**Source inbox:** `.squad/decisions/inbox/book-step4-docs.md`
+
+# Book Step 4 Docs — Working EDI Demo Runbook
+
+- **Recorded:** 2026-07-20T14:35:00-05:00
+- **Agent:** Book (Technical Writer)
+- **Branch:** `bugfix/edi-e2e-live-fixes`
+- **Source of truth:** `.squad/decisions.md`, `RESUME.md`, branch code under `infra/`, `logicapps/`, `.github/workflows/deploy.yml`, and `samples/`.
+
+## Documented
+
+- Updated `README.md` to reflect the current live status: purchaser PO → X12 850 (006030) → AS2 → supplier HTTP 200 is working, with Service Bus settlement still open.
+- Added `docs/end-to-end-flow.md` with the action-by-action message path from Service Bus topic `purchase-orders.received` through Parse, SQL persist, canonical XML, XSLT, X12 Encode, AS2 Encode, supplier POST, and HTTP 200.
+- Rewrote `docs/deployment-guide.md` as the operational deploy runbook, including out-of-band deploy-SP Key Vault grants, certificate generation, REST `contentLink` schema registration order, RBAC reality, and one-time purchaser system-assigned identity cleanup.
+- Rewrote `docs/purchaser-workflow-runbook.md` with current run/verify steps, verified AS2 output shape, app-setting gotcha, SQL binding notes, and open known issues.
+
+## TBD items needing owner confirmation
+
+- Exact reusable Service Bus REST publish command for `samples/purchase-order-e2e-test.json` (approach verified; copy/paste command should be confirmed by Kaylee/Wash before docs present it as canonical).
+- Exact reusable commands for deploy-SP Key Vault Certificate User + Secrets Officer grants.
+- Manual cleanup command, if needed, for the stray purchaser system-assigned identity; next `main.bicep` deploy should remove it.
+- Settlement root cause/fix for `Complete_Message` / `Dead_Letter_Message` `VNetPrivatePortsNotConfigured` in a no-VNet topology.
+- Final Mal/Simon decision on whether length-only currency/state/country validation is acceptable or workflow logic must restore regex semantics.
+
+### 2026-07-21T09:15:00-05:00: Purchaser Service Bus settlement requires V2 topic ops plus explicit namespace and UAMI identity
+**By:** Coordinator
+**Status:** Fixed and verified live on ugfix/edi-e2e-live-fixes commit 5ecc87b (PR #11 update).
+**Files:** logicapps/purchaser/workflows/purchaser-po-to-as2/workflow.json, logicapps/purchaser/connections.json
+
+**What:** The purchaser peek-lock settlement blocker is resolved. Complete_Message and Dead_Letter_Message were migrated with the trigger to the Service Bus V2 topic operation set: peekLockTopicMessagesV2, completeTopicMessageV2, and deadLetterTopicMessageV2, with 	opicName, subscriptionName, and lockToken supplied in workflow.json. connections.json now supplies the concrete Service Bus fully qualified namespace and pins uthProvider.Identity to the purchaser UAMI, following the same source-controlled app-content pattern already used by the SQL connection.
+
+**Root cause:** Three layers caused the failed runs. First, the V1 settlement operations surfaced the misleading VNetPrivatePortsNotConfigured error even though the apps have no VNet; moving to V2 exposed actionable connector errors. Second, V2 completeTopicMessageV2 requires ullyQualifiedNamespace; @appsetting('serviceBus__fullyQualifiedNamespace') resolved null for the settle path due the double-underscore app-setting shape, so the FQN must be explicit for this connection path. Third, the V2 settle operation defaulted to a stray system-assigned identity clientId  cb5444d-..., which was not in the directory and failed with AADSTS700016; explicit uthProvider.Identity pins settlement to id-jci-purchaser-dev.
+
+**Verified fix:** Live run  8584169636772569561943115164CU00 succeeded end-to-end; Complete_Message succeeded and the peek-locked Service Bus message settled instead of redelivering. The verified source fix is committed at 5ecc87b on ugfix/edi-e2e-live-fixes.
+
+**Follow-ups:** Keep the connection-shape note visible because connections.json currently hardcodes environment-specific Service Bus FQN and UAMI resource id; parameterize for multi-environment deployment later. Perform one-time cleanup of the purchaser app's stray system-assigned identity. Supplier decode workflow remains a stub. ParseJson regex design remains pending with Mal/Simon. Kaylee's earlier VNet/private-ports direction is explicitly superseded for this issue.
+
+### 2026-07-20T10:17:06-05:00: Service Bus built-in — migrate to V2 ops + fix connection identity/namespace for message settlement
+
+- **Author:** Wash (Logic Apps / EDI Developer)
+- **Date:** 2026-07-20T10:17:06-05:00
+- **Branch:** `bugfix/edi-e2e-live-fixes` (PR #11)
+- **Files:** `logicapps/purchaser/workflows/purchaser-po-to-as2/workflow.json`, `logicapps/purchaser/connections.json`
+- **Status:** RESOLVED & VERIFIED LIVE — full run Succeeded, `Complete_Message` Succeeded, message settled (activeMessageCount=0).
+
+## Problem
+Every purchaser run died at `Complete_Message` with the misleading error
+`VNetPrivatePortsNotConfigured`, so the peek-locked Service Bus message never settled and
+kept redelivering. These apps have **no VNet integration**, so `vnetPrivatePortsCount` is
+irrelevant (already reverted). The reference app `la-clarios-ais` (RG `RG-CLARIOS-AIS`, same
+sub) uses the Service Bus **V2** operation set for peek-lock + settle and works without this
+error.
+
+## Root cause (three layers, uncovered in order)
+1. **V1 settle ops throw a misleading error.** The built-in Service Bus **V1** settle ops
+   (`completeMessage` / `deadLetterMessage`) surface `VNetPrivatePortsNotConfigured`. The
+   **V2** ops (`completeTopicMessageV2` / `deadLetterTopicMessageV2`) instead surface clear,
+   actionable errors — which exposed the two real problems below.
+2. **Namespace not resolved for the settle action.** The V2 settle op resolves
+   `fullyQualifiedNamespace` from **app configuration** (the connector param has
+   `parameterSource: AppConfiguration`), reading the app setting keyed
+   `<connectionName>_<param>` = **`serviceBus_fullyQualifiedNamespace`** (SINGLE underscore).
+   The app only had `serviceBus__fullyQualifiedNamespace` (DOUBLE underscore, used by the
+   trigger/receive path) → settle failed `ServiceOperationRequiredParameterMissing:
+   'connectionString or fullyQualifiedNamespace' is missing`. The reference app carries
+   exactly `serviceBus_fullyQualifiedNamespace` (single) — confirming the convention.
+3. **Settle used the wrong managed identity.** With `authProvider: { Type:
+   ManagedServiceIdentity }` and no identity pinned, the settle op defaulted to the app's
+   **system-assigned** identity (appId `0cb5444d-...`), which has no SB data-plane role →
+   `AADSTS700016: Application '0cb5444d-...' not found in directory`. The trigger/receive path
+   worked all along because it reads the implicit `serviceBus__credential=managedidentity` +
+   `serviceBus__clientId=<UAMI>` app settings. Settle resolves identity from
+   `connections.json`, so it must be pinned there.
+
+## Verified correct V2 shapes
+
+### Trigger — `When_a_purchase_order_message_is_received`
+```json
+"inputs": {
+  "parameters": { "topicName": "purchase-orders.received", "subscriptionName": "all-messages" },
+  "serviceProviderConfiguration": {
+    "connectionName": "serviceBus",
+    "operationId": "peekLockTopicMessagesV2",
+    "serviceProviderId": "/serviceProviders/serviceBus"
+  }
+},
+"splitOn": "@triggerOutputs()?['body']",
+"metadata": { "preservesPartitionKey": true, "preserveOperationId": true }
+```
+(Removed the V1-only `isSessionsEnabled: false` param.)
+
+### Complete — `Complete_Message`
+```json
+"inputs": {
+  "parameters": {
+    "topicName": "purchase-orders.received",
+    "subscriptionName": "all-messages",
+    "lockToken": "@triggerBody()?['lockToken']"
+  },
+  "serviceProviderConfiguration": {
+    "connectionName": "serviceBus",
+    "operationId": "completeTopicMessageV2",
+    "serviceProviderId": "/serviceProviders/serviceBus"
+  }
+}
+```
+
+### Dead-letter — `Dead_Letter_Message`
+```json
+"inputs": {
+  "parameters": {
+    "topicName": "purchase-orders.received",
+    "subscriptionName": "all-messages",
+    "lockToken": "@triggerBody()?['lockToken']",
+    "deadLetterReason": "PurchaseOrderProcessingFailed",
+    "deadLetterErrorDescription": "@{substring(string(result('Process_Purchase_Order')), 0, min(2000, length(string(result('Process_Purchase_Order')))))}"
+  },
+  "serviceProviderConfiguration": {
+    "connectionName": "serviceBus",
+    "operationId": "deadLetterTopicMessageV2",
+    "serviceProviderId": "/serviceProviders/serviceBus"
+  }
+}
+```
+Key point: the V2 topic settle ops require **`topicName` + `subscriptionName` + `lockToken`**
+(the V1 ops took only `lockToken`). The lock accessor is still `@triggerBody()?['lockToken']`.
+
+### connections.json — serviceBus (identity + namespace)
+```json
+"serviceBus": {
+  "parameterSetName": "ManagedServiceIdentity",
+  "parameterValues": {
+    "fullyQualifiedNamespace": "sb-jci-edi-dev-2vjolmqq.servicebus.windows.net",
+    "authProvider": {
+      "Type": "ManagedServiceIdentity",
+      "Identity": "/subscriptions/8bd05b2f-62c5-4def-9869-f0617ebb3970/resourcegroups/rg-edi-purchaser/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-jci-purchaser-dev"
+    }
+  },
+  "serviceProvider": { "id": "/serviceProviders/serviceBus" }
+}
+```
+`authProvider.Identity` = the **UAMI resource id** `id-jci-purchaser-dev`
+(clientId `8a2d2355-ec3a-421f-ab1d-50ea89f15f83`). This pins the settle op to the UAMI that
+holds the SB data-plane role, fixing `AADSTS700016`.
+
+## Grounding
+- **Reference app `la-clarios-ais`** `workflow.json` (read via SCM vfs): uses
+  `peekLockTopicMessagesV2` + `completeTopicMessageV2` / `abandonTopicMessageV2`, each with
+  topicName + subscriptionName + lockToken; carries app setting
+  `serviceBus_fullyQualifiedNamespace` (single underscore). Ground truth for the V2 set.
+- **Live connector metadata** (purchaser `operationGroups/serviceBus/operations`): confirmed
+  `peekLockTopicMessagesV2`, `completeTopicMessageV2`, `deadLetterTopicMessageV2`,
+  `abandonTopicMessageV2` are all registered; `fullyQualifiedNamespace` param has
+  `parameterSource: AppConfiguration`.
+- **Microsoft Learn / web**: `deadLetterTopicMessageV2` inputs = lockToken, deadLetterReason,
+  deadLetterErrorDescription, topicName, subscriptionName.
+
+## Evidence (live)
+- Success run `08584169636779514126706405540CU00`, poNumber `PO-E2E-FIN-0721091326`:
+  OVERALL **Succeeded**; `POST_AS2_to_supplier: Succeeded`; **`Complete_Message: Succeeded/OK`**;
+  `Dead_Letter_Message: Skipped` (happy path).
+- Subscription `all-messages` `countDetails.activeMessageCount = 0` → message **settled**, not
+  redelivered.
+- Earlier prior success `08584169653306102645283118808CU00` (SB3) same config; also confirmed
+  the V2 **dead-letter** path works on an invalid payload (`Dead_Letter_Message: Succeeded`).
+
+## FLAG FOR KAYLEE / COORDINATOR (infra — must be persisted in Bicep)
+Two live changes outside pure workflow wiring were REQUIRED to settle messages and must be
+codified so a fresh deploy doesn't regress:
+1. **App setting `serviceBus_fullyQualifiedNamespace` (SINGLE underscore)** =
+   `sb-jci-edi-dev-2vjolmqq.servicebus.windows.net` — load-bearing for the V2 settle op's
+   namespace resolution (AppConfiguration parameterSource, `<connName>_<param>` key). Deleting
+   it reproduced `fullyQualifiedNamespace missing`. Currently a live app-setting; add to Bicep.
+2. **connections.json serviceBus auth/identity was changed** (scope-sensitive per task): the
+   namespace is now a literal and `authProvider.Identity` pins the UAMI. This mirrors the SQL
+   connection's identity-pinning pattern already in the same file (`managedIdentityClientId`).
+   Needed because settle defaulted to the system-assigned identity → `AADSTS700016`. Please
+   review/keep in the source-controlled connections.json (committed here).
+
+## Hard-won pitfalls (for the team)
+- Built-in Service Bus **V1 settle ops mask real errors as `VNetPrivatePortsNotConfigured`** —
+  migrate to the **V2** ops to see the true cause. Use a **matched V2 set** (trigger + settle).
+- V2 **topic** settle ops need **topicName + subscriptionName + lockToken**, not just lockToken.
+- Built-in connector params with `parameterSource: AppConfiguration` read the app setting
+  keyed **`<connectionName>_<param>`** — for serviceBus that's the **single-underscore**
+  `serviceBus_fullyQualifiedNamespace`, distinct from the trigger's double-underscore settings.
+- Settle actions resolve their **managed identity from connections.json**, not from the
+  `serviceBus__clientId` app setting the trigger uses — pin `authProvider.Identity` (or the
+  connector's clientId field) to the correct UAMI or you get `AADSTS700016` on the
+  system-assigned identity.
 

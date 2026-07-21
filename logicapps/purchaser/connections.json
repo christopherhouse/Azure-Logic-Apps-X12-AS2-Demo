@@ -3,9 +3,10 @@
     "serviceBus": {
       "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
-        "fullyQualifiedNamespace": "@appsetting('serviceBus__fullyQualifiedNamespace')",
+        "fullyQualifiedNamespace": "sb-jci-edi-dev-2vjolmqq.servicebus.windows.net",
         "authProvider": {
-          "Type": "ManagedServiceIdentity"
+          "Type": "ManagedServiceIdentity",
+          "Identity": "/subscriptions/8bd05b2f-62c5-4def-9869-f0617ebb3970/resourcegroups/rg-edi-purchaser/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-jci-purchaser-dev"
         }
       },
       "serviceProvider": {

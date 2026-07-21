@@ -24,3 +24,5 @@
 
 📌 Team update (2026-07-20T14:25:00-05:00): Step 3 Bicep persistence complete on bugfix/edi-e2e-live-fixes at commit e07c4fe: identity-based AzureWebJobsStorage for both Logic Apps, clean SupplierAs2EndpointUrl KV reference, consistent OpenTelemetry, purchaser topic Data Receiver RBAC, UAMI-only identity, and senderApplicationId verification are persisted. Runbook backlog remains for schema registration, dev-only CLI Data Sender, deploy-SP Key Vault grants, and one-time system-MI cleanup. — decided by Kaylee
 
+
+📌 Team update (2026-07-21T09:15:00-05:00): Purchaser settlement is fixed in source by hardcoded connections.json Service Bus FQN plus explicit purchaser UAMI uthProvider.Identity; later multi-env work must parameterize those values. One-time cleanup of the purchaser app's stray system-assigned identity remains pending. — decided by Coordinator

@@ -15,3 +15,5 @@
 📌 Team update (2026-07-16T12:32:21-05:00): OIDC deployment identity is provisioned and the repo is deploy-ready; humans need to review/merge PR #1 and run the first live deploy. — decided by Zoe
 
 📌 Team update (2026-07-20T14:05:00-05:00): ParseJson regex validation is a design gap: Logic Apps rejected JSON Schema pattern keywords in the action shape, so runtime uses minLength/maxLength now while Mal/Simon decide where regex-grade validation belongs.
+
+📌 Team update (2026-07-20T14:45:00-05:00): ParseJson reduced-validation decision remains pending Mal/Simon call: current workflow uses minLength/maxLength after Logic Apps rejected JSON Schema pattern keywords; decide whether length-only currency/state/country validation is acceptable or regex semantics must be restored elsewhere. — decided by Book/Scribe
