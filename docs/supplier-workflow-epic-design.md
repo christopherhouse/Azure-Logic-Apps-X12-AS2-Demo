@@ -66,7 +66,7 @@ flowchart TD
         SADEC["AS2 Decode<br/>decrypt: supplier-encryption PRIVATE<br/>verify sig: purchaser-signing PUBLIC"]
         SMDN["Return signed sync MDN<br/>(HTTP response)"]
         SXDEC["X12 Decode 850 + schema-validate<br/>(supplier receive agreement)"]
-        SPERSIST["Map → canonical → SQL upsert<br/>usp_UpsertSupplierPurchaseOrder (SupplierRole)"]
+        SPERSIST["Map → canonical → SQL upsert<br/>sup.usp_UpsertPurchaseOrder (SupplierRole → sup schema)"]
         S997["Generate 997 from decode"]
         SXENC["X12 Encode 997<br/>(supplier send agreement)"]
         SAENC["AS2 Encode 997<br/>sign: supplier-signing PRIVATE<br/>encrypt: purchaser-encryption PUBLIC"]
@@ -134,41 +134,55 @@ the purchaser does not gate anything on the MDN it returns for the 997.
 
 ## 3. Integration Account wiring — exact agreements and where each lives
 
-### 3.1 Azure reality: IA agreements are bidirectional objects
+### 3.1 Agreement modeling — separate directional X12 agreements per transaction set
 
-An `Microsoft.Logic/integrationAccounts/agreements` resource is **inherently bidirectional** — it carries a
-`receiveAgreement` block **and** a `sendAgreement` block for one partner pair + one protocol. The live
-purchaser IA proves this: `Purchaser-Supplier-X12` and `Purchaser-Supplier-AS2` each already contain **both**
-blocks (`infra/integration-account/ia-content.bicep`), even though only the send blocks are exercised today.
+> **RECONCILED to built truth (2026-07-21).** The original design proposed one bidirectional X12 agreement per
+> IA (receive=850 / send=997 in the two blocks). The coordinator locked (per Simon's proposal) and the build
+> uses **two separate X12 agreement resources** — one per direction/transaction set — because a single X12
+> agreement's `functionalGroupId` is a **scalar** (the 850 receive needs `GS01=PO`; the 997 send needs
+> `GS01=FA`), so the two functional groups **cannot** share one agreement resource. AS2 stays as **one
+> bidirectional agreement per partner pair** (its receive/send blocks carry no conflicting scalar). This
+> section and §3.2 now describe what was actually built (verified against `ia-content-supplier.bicep`,
+> `ia-content.bicep`, and both `workflow.json` files).
 
-**Decision (Mal).** Rather than proliferate one-direction agreement resources, this epic uses **one X12
-agreement + one AS2 agreement per partner pair per IA**, and drives direction through the receive/send blocks.
-The directional names the charter asks for (`…-Receive`, `…-997-Send`) are kept as **logical role labels** for
-the blocks, not as separate resources. This mirrors the existing convention and keeps control-number pools and
-partner bindings coherent. See §11 open items — if Simon finds the built-in 997 encode needs a dedicated named
-agreement, we split then.
+**What this means:**
+- **Supplier IA** gets **two X12 agreements** — `Supplier-Purchaser-X12-850` (receive, `GS01=PO`) and
+  `Supplier-Purchaser-X12-997` (send, `GS01=FA`) — plus **one** AS2 agreement `Supplier-Purchaser-AS2`.
+- **Purchaser IA** keeps its live `Purchaser-Supplier-X12` (850 send) **unchanged** and gains a **new,
+  separate** `Purchaser-Supplier-X12-997` (997 receive, `GS01=FA`), plus **activates** the receive block of
+  the existing `Purchaser-Supplier-AS2`.
+- **X12 Decode auto-resolves** its agreement from the message's ISA/GS identities, so **no
+  `X12ReceiveAgreementName` app setting exists** (it was removed). Only the **Encode** actions take an explicit
+  `agreementName`, read from an app setting (§6).
 
-### 3.2 Agreements by IA
+### 3.2 Agreements by IA (as built)
 
-| IA (region) | Agreement resource | Convention name | `receiveAgreement` role | `sendAgreement` role | Status |
-|-------------|--------------------|-----------------|-------------------------|----------------------|--------|
-| **Supplier IA** (Central US) | X12 | `Supplier-Purchaser-X12` | **X12-Receive-850** — decode inbound 850, schema-validate (host `SUPPLIER01`, guest `PURCHASER01`) | **X12-Send-997** — encode outbound 997 | **NEW** |
-| **Supplier IA** (Central US) | AS2 | `Supplier-Purchaser-AS2` | **AS2-Receive** — decrypt inbound (supplier-encryption private), verify purchaser sig, return signed MDN | **AS2-Send** — sign (supplier-signing private) + encrypt (purchaser-encryption public) the 997, request MDN | **NEW** |
-| **Purchaser IA** (East US 2) | X12 | `Purchaser-Supplier-X12` | **X12-Receive-997** — decode inbound 997 (add 997 schema reference) | X12-Send-850 (LIVE) | **EXTEND** |
-| **Purchaser IA** (East US 2) | AS2 | `Purchaser-Supplier-AS2` | **AS2-Receive** — decrypt inbound 997 (purchaser-encryption private), verify supplier sig, return signed MDN | AS2-Send-850 (LIVE) | **ACTIVATE** existing receive block |
+| IA (region) | Agreement resource | Protocol | Direction / role | Key envelope | Status |
+|-------------|--------------------|----------|------------------|--------------|--------|
+| **Supplier IA** (Central US) | `Supplier-Purchaser-X12-850` | X12 | **Receive 850** — decode inbound 850, schema-validate `X12_00603_850` (host `SUPPLIER01`, guest `PURCHASER01`); receive-side duplicate detection ON | `GS01=PO` | **NEW** |
+| **Supplier IA** (Central US) | `Supplier-Purchaser-X12-997` | X12 | **Send 997** — encode outbound 997, schema `X12_00603_997`; agreement owns the 997 ISA13/GS06/ST02 | `GS01=FA` | **NEW** |
+| **Supplier IA** (Central US) | `Supplier-Purchaser-AS2` | AS2 | **Receive** (decrypt supplier-encryption private, verify purchaser-signing public, return signed MDN) + **Send** (sign supplier-signing private, encrypt purchaser-encryption public, request MDN) | AS2Identity | **NEW** |
+| **Purchaser IA** (East US 2) | `Purchaser-Supplier-X12` | X12 | Send 850 (LIVE, unchanged) | `GS01=PO` | unchanged |
+| **Purchaser IA** (East US 2) | `Purchaser-Supplier-X12-997` | X12 | **Receive 997** — decode inbound 997, schema `X12_00603_997` (host `Purchaser`, guest `Supplier`); `needFunctionalAcknowledgement=false` (you don't ACK an ACK) | `GS01=FA` | **NEW** |
+| **Purchaser IA** (East US 2) | `Purchaser-Supplier-AS2` | AS2 | **Receive** activated (decrypt purchaser-encryption private, verify supplier-signing public, return signed MDN) + Send 850 (LIVE) | AS2Identity | **ACTIVATE** receive block |
 
-**Supplier IA partners.** The supplier IA needs the same two `partners` artifacts as the purchaser IA —
+**Supplier IA partners.** The supplier IA has the same two `partners` artifacts as the purchaser IA —
 `Supplier` (host, `ZZ`/`SUPPLIER01`) and `Purchaser` (guest, `ZZ`/`PURCHASER01`) — mirrored from
 `ia-content.bicep` §5.2. New on the supplier IA.
 
-**Purchaser IA additions.** The purchaser IA already has `Purchaser`/`Supplier` partners and both agreement
-objects. This epic:
-- Adds a **997 schema reference** to `Purchaser-Supplier-X12`'s `receiveAgreement.schemaReferences`
-  (`messageId: '997'`, `schemaVersion: '00603'`, `schemaName: 'X12_00603_997'`) — the 997 xsd must be
-  registered on the purchaser IA (see §5, deploy ordering). *Exact schema id/version → see Simon's EDI spec.*
-- Binds the **receive-side certificates** into `Purchaser-Supplier-AS2`'s `receiveAgreement.securitySettings`
-  (§4). The receive block currently exists with `encryptMessage:false / signMessage:false`; this epic flips it
-  on and names the receive certs.
+**Purchaser IA additions.** The purchaser IA already has `Purchaser`/`Supplier` partners and the live 850
+agreements. This epic:
+- Adds a **new** `Purchaser-Supplier-X12-997` agreement (host `Purchaser`, guest `Supplier`, `GS01=FA`,
+  `messageId '997'`, schema `X12_00603_997`) — **not** an added schema-reference on the live 850 agreement
+  (the two functional groups can't co-exist in one agreement — §3.1).
+- Binds the **receive-side certificates** into `Purchaser-Supplier-AS2`'s `receiveAgreement.securitySettings`,
+  gated by a bicep `activateAs2Receive` flag that turns on only when both receive public certs are supplied
+  (`ia-content.bicep`). This flips the previously-inert receive block on and names the receive certs (§4).
+
+**997 schema placement.** The 997 xsd (`X12_00603_997`, root `X12_00603_997`) is an **IA artifact resolved by
+the agreement** and is registered on **both** IAs: supplier IA (to **encode**) and purchaser IA (to
+**decode**). CI registers it via the same REST `contentLink` path used for the 850 (`deploy.yml`
+"Register SUPPLIER X12 850/997 schema" steps).
 
 **997 schema placement.** Like the 850, the 997 xsd is an **IA artifact resolved by the agreement**. If it
 exceeds the inline `content` limit it is registered via **REST `contentLink`** exactly like the 850 (purchaser
@@ -235,11 +249,11 @@ a potential ordering deadlock. Read §5.2 carefully — it is the crux of this e
 graph TD
     BASE["Purchaser epic steps A–H (IA content, certs, link, telemetry, app Artifacts)"]
 
-    SQLSUP["A2. Supplier SQL: tables + usp_UpsertSupplierPurchaseOrder<br/>(SupplierRole INSERT+EXECUTE already granted)"]
+    SQLSUP["A2. Supplier SQL: sup schema + sup.usp_UpsertPurchaseOrder<br/>(SupplierRole scoped to sup; dbo grants revoked)"]
     IACERTS2["B2. Bind 4 leaf certs across both IAs<br/>(3 new private KV key refs + public bodies)"]
     IA997["C2. Register 997 schema on BOTH IAs<br/>(supplier encode + purchaser decode)"]
-    IASUP["D2. Supplier IA: partners + X12(850 recv/997 send) + AS2(recv/send) agreements"]
-    IAPUR2["E2. Purchaser IA: add 997 schema ref to X12 receive + activate AS2 receive certs"]
+    IASUP["D2. Supplier IA: partners + X12-850(recv) + X12-997(send) + AS2(recv/send) agreements"]
+    IAPUR2["E2. Purchaser IA: new X12-997 receive agreement + activate AS2 receive certs"]
     IALINKSUP["F2. Link SUPPLIER app to supplier IA<br/>WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL (KV-ref)"]
 
     WFSUP["I2. Deploy SUPPLIER workflow (supplier-inbound-ack, full pipeline)"]
@@ -307,8 +321,8 @@ indirection for the outbound POST target — the runbook confirms the live purch
 |---------|-------|---------|
 | `WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL` | `@Microsoft.KeyVault(...)` (supplier IA callback URL secret) | Links the supplier app to the **supplier IA** so AS2/X12 Decode + Encode resolve agreements. New — the stub needed no IA link. |
 | `Purchaser997EndpointUrl` | `@Microsoft.KeyVault(SecretUri=…/purchaser-997-endpoint-url)` | Outbound AS2 POST target for the 997 (the purchaser-inbound-997 callback URL). Injected post-deploy (§5.2). |
-| `X12AgreementName` | `Supplier-Purchaser-X12` | 997 X12 Encode `agreementName`, read via `@appsetting('X12AgreementName')` (mirrors purchaser §5.4). Matches the supplier IA agreement name. |
-| `sql__serverFqdn` / `sql__databaseName` / `sql__clientId` | concrete values | Already present in supplier `connections.json`; confirm they resolve (supplier persist uses the same shared SQL server, `SupplierRole`). |
+| `X12SendAgreementName` | `Supplier-Purchaser-X12-997` | 997 X12 Encode `agreementName`, read via `@appsetting('X12SendAgreementName')`. Names the supplier **997 send** agreement (`GS01=FA`). *(This is a distinct setting from the purchaser's `X12AgreementName`, which names the 850 send agreement — see §3.1 reconciliation.)* |
+| `sql__serverFqdn` / `sql__databaseName` / `sql__clientId` | concrete values | Already present in supplier `connections.json`; confirm they resolve (supplier persist uses the same shared SQL server, `SupplierRole` scoped to `sup`). |
 
 AS2 identities (`as2From: 'SUPPLIER01'`, `as2To: 'PURCHASER01'`) are **workflow constants** (as the purchaser
 workflow hard-codes its `as2From`/`as2To`), not app settings — Wash sets them in `workflow.json`.
@@ -327,24 +341,29 @@ workflow hard-codes its `as2From`/`as2To`), not app settings — Wash sets them 
 
 ## 7. Supplier SQL persist (locked #5)
 
-The decoded 850 is mapped to the same canonical PO shape and upserted into the **supplier's** own tables via a
-**new** stored procedure, distinct from the purchaser's `usp_UpsertPurchaseOrder`.
+The decoded 850 is mapped to the canonical PO shape and upserted into the supplier's **own `sup` schema** via a
+dedicated stored procedure, distinct from the purchaser's `dbo.usp_UpsertPurchaseOrder`.
 
-- **Proc (proposed):** `dbo.usp_UpsertSupplierPurchaseOrder` — same OPENJSON-shredded `@LinesJson NVARCHAR(MAX)`
-  contract as the purchaser proc (the built-in SQL connector cannot pass a TVP — locked repo decision), same
-  idempotency on `PoNumber` so an AS2 re-transmit does not duplicate. Table shape and exact columns → **see
-  Simon's EDI/SQL spec**; recommend reusing the `010-tables.sql` normalized shape or a supplier-scoped schema.
-- **Grant:** `SupplierRole` already holds **`GRANT INSERT ON SCHEMA::dbo`** + **`GRANT EXECUTE ON SCHEMA::dbo`**
-  (`infra/sql/create-users-roles.sql`) and the supplier UAMI is already a member. So the new proc needs **no
-  new SQL grant** — the existing role covers `EXEC` of the new proc and its inserts run under the proc's
-  ownership chain. **Zoe: confirm, no change.**
+> **RECONCILED to built truth (2026-07-21).** The §7 open question below was **resolved in favor of
+> supplier-owned tables** — my recommendation. The build creates a **`sup` schema** with mirror tables
+> (`infra/sql/schema/030-sup-tables.sql`) and **`sup.usp_UpsertPurchaseOrder`**
+> (`040-usp-upsert-supplier.sql`), and a code-review finding **tightened `SupplierRole`**: its earlier
+> `dbo` INSERT+EXECUTE grants are **explicitly REVOKED** and it is granted INSERT+EXECUTE on **`SCHEMA::sup`
+> only** (`infra/sql/create-users-roles.sql`). The workflow calls `[sup].[usp_UpsertPurchaseOrder]`.
+
+- **Proc (built):** `sup.usp_UpsertPurchaseOrder` — same OPENJSON-shredded `@LinesJson NVARCHAR(MAX)` contract
+  as the purchaser proc (the built-in SQL connector cannot pass a TVP — locked repo decision), idempotent on
+  `PoNumber` so an AS2 re-transmit does not duplicate.
+- **Grant (built):** `SupplierRole` is scoped to `SCHEMA::sup` (INSERT+EXECUTE); its prior `dbo` grants are
+  revoked so a redeploy against an already-granted database actually removes them. This is a **tightening**
+  from the design's "no new grant on dbo" — a strictly better trust boundary. **Zoe signed off.**
 - **Connection:** supplier `connections.json` already defines the managed-identity `sql` service-provider
-  connection. **Wash** wires `Persist_...` to the new proc name; no `Microsoft.Web/connections`.
+  connection; the workflow's `Persist_Purchase_Order` targets `[sup].[usp_UpsertPurchaseOrder]`; no
+  `Microsoft.Web/connections`.
 
-> **Open question (flag):** should the supplier persist to the **same** `PurchaseOrder` tables the purchaser
-> writes (shared schema, risk of cross-party collision on `PoNumber`) or to **supplier-owned** tables/schema?
-> Recommendation: **supplier-owned tables** (e.g. `supplier.PurchaseOrder`) to keep the two parties' data
-> boundaries clean, consistent with the distinct-identity principle in §2. **Simon + Christopher to confirm.**
+> **Resolved (was open question):** supplier persists to **supplier-owned `sup` tables**, not the shared `dbo`
+> `PurchaseOrder` tables — keeping the two parties' data boundaries clean, consistent with the distinct-identity
+> principle in §2.
 
 ---
 
@@ -361,14 +380,21 @@ built-in AS2/X12 Decode operation types against the live runtime (as was done fo
 3. **Response** — return the signed **synchronous MDN** in the HTTP response (this *replaces* `Return_200_OK`).
    Everything after the Response runs **asynchronously** (the purchaser's send already treats the MDN as
    non-fatal, so returning it and continuing is safe).
-4. **X12 Decode (850)** + schema-validate against the supplier IA receive agreement.
-5. **Persist** — map decoded 850 → canonical → `EXEC dbo.usp_UpsertSupplierPurchaseOrder` (MI, `SupplierRole`).
-6. **Generate 997** from the decode result — *see Simon's EDI spec* for whether the built-in X12 Decode emits
-   the 997 directly (`needFunctionalAcknowledgement`) or a separate encode of a mapped 997 XML is required.
-7. **X12 Encode (997)** — `agreementName = @appsetting('X12AgreementName')` (supplier send agreement).
+4. **X12 Decode (850)** + schema-validate; agreement auto-resolved from ISA/GS identities (no
+   `X12ReceiveAgreementName` setting). After decode, the flow **forks** into two parallel branches (5 and 6–9).
+5. **Persist branch** — `Transform_850_to_PO_Canonical` (map) → `Parse_Canonical` (`json(xml)`) →
+   `Normalize_Lines` (force `lines` to always be a JSON array so `OPENJSON` works for 1-line and N-line POs) →
+   `Persist_Purchase_Order` = `EXEC [sup].[usp_UpsertPurchaseOrder]` (MI, `SupplierRole` scoped to `sup`).
+6. **Generate 997** — the workflow **explicitly builds** the 997 XML (`Build_997_Xml`, root `X12_00603_997`,
+   006030, structure `ST-AK1-AK2-AK5-AK9-SE`) rather than relying on the X12 Decode auto-generator (which
+   emits a **4010** 997). AK102/AK103/AK202 echo the decoded 850's GS06/GS08/ST02. *(Resolved — was flagged to
+   Simon; see Simon's EDI spec for the echo rules.)*
+7. **X12 Encode (997)** — `agreementName = @appsetting('X12SendAgreementName')` (= `Supplier-Purchaser-X12-997`,
+   `GS01=FA`); the agreement owns the 997's own ISA13/GS06/ST02.
 8. **AS2 Encode (997)** — `as2From: 'SUPPLIER01'`, `as2To: 'PURCHASER01'`; sign (supplier-signing private) +
    encrypt (purchaser-encryption public), request sync MDN.
-9. **HTTP POST** the 997 AS2 bytes + headers to `@appsetting('Purchaser997EndpointUrl')`.
+9. **HTTP POST** the 997 AS2 bytes + headers to `@appsetting('Purchaser997EndpointUrl')`, with a
+   `Record_997_Send_Failure` handler on `[FAILED, TIMEDOUT]` for run-history visibility.
 
 > **Design note / open question:** returning the MDN (step 3) before the heavy processing (4–9) is the correct
 > AS2 pattern, but a **stateful** workflow that continues after `Response` means the 997 transmission failing
@@ -383,7 +409,8 @@ built-in AS2/X12 Decode operation types against the live runtime (as was done fo
 2. **AS2 Decode** — decrypt (purchaser-encryption private) + verify (supplier-signing public) against the
    purchaser IA AS2 receive agreement; emit decoded 997 + signed MDN.
 3. **Response** — return the signed synchronous MDN.
-4. **X12 Decode (997)** against the purchaser IA receive agreement (997 schema ref added in §3.2).
+4. **X12 Decode (997)** against the new `Purchaser-Supplier-X12-997` receive agreement (schema `X12_00603_997`;
+   `needFunctionalAcknowledgement=false` — you don't ACK an ACK).
 5. **Correlate / log** — record the acknowledged interchange/group control numbers as tracked properties
    (close the loop against the 850 the purchaser sent). Deep correlation store is **out of scope** for the
    demo — flag if the owner wants persisted ACK reconciliation.
@@ -410,6 +437,11 @@ identities or role assignments, provided §5.2 ordering is honored and §4.2 is 
 
 ## 10. Work split — build wave (for coordinator fan-out)
 
+> **Historical fan-out (pre-build).** This section is the task list as originally handed to the crew. The build
+> refined several items — the **authoritative built truth is in §§3, 6, 7, 8, 11** (directional X12 agreements,
+> `X12SendAgreementName`, supplier-owned `sup` schema + `sup.usp_UpsertPurchaseOrder`, explicit 997 build).
+> Retained for provenance; where this section and the reconciled sections differ, the reconciled sections win.
+
 > **Reviewer gate:** Mal reviews every artifact before any merge. **Nothing merges** (owner directive) — the
 > coordinator handles PRs. On rejection, a **different** agent revises (not the original author).
 
@@ -419,8 +451,8 @@ identities or role assignments, provided §5.2 ordering is honored and §4.2 is 
 - Specify the **supplier receive** agreement (X12 850 decode: validation, schema ref, envelope) and the
   **supplier send** agreement (X12 997 encode: control-number strategy for the 997 interchange/group/set).
 - Specify how the **997 is generated** from the X12 Decode (built-in functional-ack emission vs mapped encode).
-- Specify the supplier SQL tables + `usp_UpsertSupplierPurchaseOrder` (OPENJSON, no TVP; idempotent on
-  `PoNumber`), and resolve the §7 shared-vs-supplier-owned tables question.
+- Specify the supplier SQL tables + `sup.usp_UpsertPurchaseOrder` (supplier-owned `sup` schema; OPENJSON, no
+  TVP; idempotent on `PoNumber`), and resolve the §7 shared-vs-supplier-owned tables question.
 - Define the decoded-850 → canonical map used by the supplier persist.
 
 **Kaylee — Bicep + app settings + CI + IA content**
@@ -458,27 +490,34 @@ identities or role assignments, provided §5.2 ordering is honored and §4.2 is 
 
 ---
 
-## 11. Open items / assumptions (flagged, non-blocking for design)
+## 11. Open items / assumptions — resolution status (updated 2026-07-21, post-build)
 
-1. **997 encode agreement modeling** — confirm the built-in X12 **997 Encode** resolves cleanly from a single
-   bidirectional `Supplier-Purchaser-X12` agreement's send block, or whether a dedicated named 997 agreement is
-   required. **Owner: Simon** (§3.1). If a split is needed, add `Supplier-Purchaser-997-Send` as its own
-   resource.
-2. **997 generation mechanism** — built-in functional-ack emission from X12 Decode vs a mapped 997 XML +
-   X12 Encode. **Owner: Simon** (§8.1 step 6).
-3. **Supplier persist target** — shared `PurchaseOrder` tables vs supplier-owned tables/schema. Recommend
-   supplier-owned. **Owner: Simon + Christopher** (§7).
-4. **First-party SP grant scope** — confirm vault-scoped, not per-secret, so the 3 new key refs resolve with
-   no new RBAC. **Owner: Zoe** (§4.2).
-5. **Two purchaser workflows in one deploy** — confirm `purchaser-inbound-997` ships in the same app zip as
-   `purchaser-po-to-as2` so the §5.2 batched injection holds. **Owner: Kaylee** (§5.2).
-6. **AS2 Decode / X12 Decode built-in shapes** — confirm operation `type`s and output paths against the live
-   runtime (the Encode shapes were verified this way). **Owner: Wash** (§8).
-7. **Async 997 failure visibility** — HTTP-triggered receive has no Service Bus lock to settle; a 997-send
-   failure after the MDN is returned is only visible via telemetry/tracked properties. Confirm that is
-   acceptable for the demo or add a compensating alert. **Owner: Jayne + owner** (§8.1, §9).
+All design-time open items are now **resolved by the build** except the runtime-verification items Zoe/Jayne
+own at deploy time. Status recorded here for the reviewer gate.
+
+1. **997 encode agreement modeling** — **RESOLVED.** Built as **two separate directional X12 agreements**
+   (`Supplier-Purchaser-X12-850` receive `GS01=PO`, `Supplier-Purchaser-X12-997` send `GS01=FA`; likewise a
+   dedicated `Purchaser-Supplier-X12-997` on the purchaser IA) because one agreement's `functionalGroupId` is
+   scalar. See §3.1. Original single-bidirectional-agreement proposal superseded.
+2. **997 generation mechanism** — **RESOLVED.** Explicit `Build_997_Xml` (006030, `X12_00603_997`) + X12
+   Encode, **not** the Decode auto-generator (which emits 4010). §8.1 step 6.
+3. **Supplier persist target** — **RESOLVED** in favor of **supplier-owned `sup` schema** +
+   `sup.usp_UpsertPurchaseOrder`; `SupplierRole` tightened to `SCHEMA::sup` (dbo grants revoked). §7.
+4. **First-party SP grant scope** — **VERIFIED (Zoe SIGN-OFF).** The 3 new private key refs resolve through
+   the existing vault-scoped first-party-SP grant; **no new RBAC edge**. §4.2. (Runtime cert-binding behavior
+   is a Zoe runtime-verify note, not a blocker.)
+5. **Two purchaser workflows in one deploy** — **RESOLVED.** `purchaser-inbound-997` ships in the purchaser
+   app zip; CI reads its callback URL in the same non-interleaved dual-injection step as the supplier URL. §5.2.
+6. **AS2 Decode / X12 Decode built-in shapes** — **runtime-verify (Wash + Jayne).** Shapes mirror the verified
+   Encode actions and Learn B2B examples; the `goodMessages[].body` per-item accessor and the AS2 decode
+   output paths are flagged in the workflow descriptions for a designer/runtime round-trip. Non-blocking for
+   the doc; Jayne's health-checks cover it. §8.
+7. **Async 997 failure visibility** — **accepted for demo.** HTTP-triggered receive has no SB lock to settle; a
+   997-send failure after the MDN is captured by `Record_997_Send_Failure` + tracked properties + v2 telemetry.
+   §8.1, §9.
 
 ---
-*Authored by Mal. The round-trip diagram in §1 is the contract: if it isn't on the diagram, it doesn't ship.
-Implementation is owned by the specialists in §10 and must conform to this spec. EDI substance is Simon's —
-see Simon's EDI spec where flagged. Mal reviews before merge; nothing merges (owner directive).*
+*Authored by Mal; reconciled to built truth 2026-07-21. The round-trip diagram in §1 is the contract: if it
+isn't on the diagram, it doesn't ship. §§3, 6, 7, 8, 11 carry post-build reconciliation banners where the
+build refined the design (directional agreements, `sup` schema, explicit 997 build). EDI substance is Simon's.
+Mal reviews before merge; nothing merges (owner directive).*
