@@ -1,11 +1,11 @@
 {
   "serviceProviderConnections": {
     "serviceBus": {
+      "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
         "fullyQualifiedNamespace": "@appsetting('serviceBus__fullyQualifiedNamespace')",
-        "authentication": {
-          "type": "ManagedServiceIdentity",
-          "identity": "@appsetting('serviceBus__clientId')"
+        "authProvider": {
+          "Type": "ManagedServiceIdentity"
         }
       },
       "serviceProvider": {
@@ -14,12 +14,12 @@
       "displayName": "Service Bus (Managed Identity)"
     },
     "sql": {
+      "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
-        "server": "@appsetting('sql__serverFqdn')",
-        "database": "@appsetting('sql__databaseName')",
-        "authentication": {
-          "type": "ManagedServiceIdentity",
-          "identity": "@appsetting('sql__clientId')"
+        "serverName": "@appsetting('sql__serverFqdn')",
+        "databaseName": "@appsetting('sql__databaseName')",
+        "authProvider": {
+          "Type": "ManagedServiceIdentity"
         }
       },
       "serviceProvider": {

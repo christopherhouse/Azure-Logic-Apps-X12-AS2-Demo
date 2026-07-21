@@ -6,21 +6,175 @@
       "manual": {
         "type": "Request",
         "kind": "Http",
-        "description": "SAS-signed HTTP trigger. CI extracts this trigger's callback URL (design 6) and injects it into the purchaser app setting SupplierAs2Endpoint__url as a Key Vault reference. Trigger name is 'manual' so the listCallbackUrl path matches design 6.",
+        "description": "SAS-signed HTTP trigger that receives the purchaser's AS2 MIME payload + AS2 headers. Trigger name is kept 'manual' (build-lock 5) so CI extracts this trigger's callback URL and injects it into the purchaser app setting SupplierAs2EndpointUrl (KV ref). Body JSON schema is left empty because AS2/X12 content arrives as flat file.",
         "inputs": {
           "schema": {}
         }
       }
     },
     "actions": {
-      "Return_200_OK": {
-        "type": "Response",
-        "kind": "Http",
-        "description": "Minimal inbound acknowledgment. Returns 200 OK so the purchaser's outbound AS2 POST succeeds. MDN generation / AS2 Decode is deferred to a later epic (design 1, 6).",
+      "Decode_AS2": {
+        "type": "AS2Decode",
+        "description": "AS2 (v2) built-in Decode: decrypt + verify the purchaser's signature against the supplier AS2 receive agreement 'Supplier-Purchaser-AS2' (resolved by AS2-From/AS2-To in the message headers). Produces the base64 decoded 850 payload and a signed synchronous MDN to return in the HTTP Response. Native in-app action (type AS2Decode, no serviceProviderConfiguration, no connections.json entry) mirroring the verified AS2Encode shape.",
         "runAfter": {},
         "inputs": {
+          "messageToDecode": "@triggerOutputs()?['body']",
+          "messageHeaders": "@triggerOutputs()?['headers']"
+        },
+        "trackedProperties": {
+          "mdnGenerated": "@not(empty(body('Decode_AS2')?['outgoingMdnContent']))"
+        }
+      },
+      "Respond_With_MDN": {
+        "type": "Response",
+        "kind": "Http",
+        "description": "Return the signed synchronous MDN (headers + content) from Decode_AS2 with HTTP 200 so the purchaser's outbound AS2 POST succeeds. Placed immediately after Decode_AS2 (per MS Learn B2B tutorial) so the transport ACK is returned even if downstream business processing fails. The 997 functional ACK is sent separately as a fresh AS2 message.",
+        "runAfter": {
+          "Decode_AS2": ["SUCCEEDED"]
+        },
+        "inputs": {
           "statusCode": 200,
-          "body": "AS2 message received."
+          "headers": "@body('Decode_AS2')?['outgoingMdnContent']?['outgoingMdnHeaders']",
+          "body": "@body('Decode_AS2')?['outgoingMdnContent']?['messageContent']"
+        }
+      },
+      "Decoded_850_FlatFile": {
+        "type": "Compose",
+        "description": "The AS2 (v2) decoded payload is base64-encoded JSON string content. Convert it to the X12 850 flat-file string once, so it can be fed to X12 Decode and used to read the 850's group/transaction control numbers for the 997 echoes (base64ToString per MS Learn B2B 'Add the decode X12' Standard example).",
+        "runAfter": {
+          "Respond_With_MDN": ["SUCCEEDED"]
+        },
+        "inputs": "@base64ToString(body('Decode_AS2')?['messageContent'])"
+      },
+      "Decode_X12_850": {
+        "type": "X12Decode",
+        "description": "X12 built-in Decode of the 850 flat file (operationId x12Decode, JSON param messageToDecode). Resolves the supplier X12 receive agreement 'Supplier-Purchaser-X12-850' by ISA/GS identities from the linked Integration Account and validates against schema X12_00603_850. Native in-app action (type X12Decode, no serviceProviderConfiguration, no connections.json entry) mirroring the verified X12Encode shape. Good transaction sets appear in output goodMessages, invalid ones in badMessages.",
+        "runAfter": {
+          "Decoded_850_FlatFile": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "messageToDecode": "@outputs('Decoded_850_FlatFile')"
+        }
+      },
+      "Build_997_Xml": {
+        "type": "Compose",
+        "description": "Explicitly build the 997 XML (root X12_00603_997) for a version-consistent 006030 acknowledgment (build-lock 1: do NOT rely on the X12 Decode auto-generated 4010 997). Happy-path structure ST-AK1-AK2-AK5-AK9-SE (accepted). Control-number echoes are read from the decoded 850 flat file per Simon's rule of record: AK102 <- 850 GS06, AK103 <- 850 GS08, AK202 <- 850 ST02; AK101='PO'/AK201='850' are the locked functional-group/transaction-set ids. ST02/SE02 are placeholders overwritten by the send agreement's control-number generator. Global elements (AK1/AK2Loop1/AK2/AK5/AK9) are X12-namespace-qualified; local ST/SE and data fields are unqualified, per Simon's X12_00603_997.xsd.",
+        "runAfter": {
+          "Decode_X12_850": ["SUCCEEDED"]
+        },
+        "inputs": "<ns0:X12_00603_997 xmlns:ns0=\"http://schemas.microsoft.com/BizTalk/EDI/X12/2006\"><ST><ST01>997</ST01><ST02>0001</ST02></ST><ns0:AK1><AK101>PO</AK101><AK102>@{trim(split(split(outputs('Decoded_850_FlatFile'),'~')[1],'*')[6])}</AK102><AK103>@{trim(split(split(outputs('Decoded_850_FlatFile'),'~')[1],'*')[8])}</AK103></ns0:AK1><ns0:AK2Loop1><ns0:AK2><AK201>850</AK201><AK202>@{trim(split(split(outputs('Decoded_850_FlatFile'),'~')[2],'*')[2])}</AK202></ns0:AK2><ns0:AK5><AK501>A</AK501></ns0:AK5></ns0:AK2Loop1><ns0:AK9><AK901>A</AK901><AK902>1</AK902><AK903>1</AK903><AK904>1</AK904></ns0:AK9><SE><SE01>6</SE01><SE02>0001</SE02></SE></ns0:X12_00603_997>"
+      },
+      "Encode_997_to_X12": {
+        "type": "X12Encode",
+        "description": "X12 built-in Encode of the 997 XML at 006030 (operationId x12Encode). Resolves the supplier X12 send agreement 'Supplier-Purchaser-X12-997' (GS01=FA) by name from @appsetting('X12SendAgreementName'); the agreement owns/generates the 997's own ISA13/GS06/ST02 (distinct from the AK102/AK202 echoes). Native in-app action mirroring the verified X12Encode shape.",
+        "runAfter": {
+          "Build_997_Xml": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "messageToEncode": "@outputs('Build_997_Xml')",
+          "agreementName": "@appsetting('X12SendAgreementName')"
+        }
+      },
+      "Encode_997_to_AS2": {
+        "type": "AS2Encode",
+        "description": "AS2 (v2) built-in Encode of the 997 interchange: sign + encrypt and request a synchronous MDN per the supplier AS2 send agreement. Direction is reversed from the 850: as2From=SUPPLIER01, as2To=PURCHASER01. Native in-app action mirroring the verified AS2Encode shape.",
+        "runAfter": {
+          "Encode_997_to_X12": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "messageToEncode": "@body('Encode_997_to_X12')",
+          "as2From": "SUPPLIER01",
+          "as2To": "PURCHASER01"
+        }
+      },
+      "POST_997_to_purchaser": {
+        "type": "Http",
+        "description": "POST the signed+encrypted AS2 997 payload + AS2 headers to the purchaser's inbound-997 callback URL (KV-referenced app setting Purchaser997EndpointUrl). Reuses the verified AS2 output accessors messageHeaders / messageContent.$content from the working send workflow. The purchaser returns its own MDN in the response; success/failure is captured as a tracked property (own-action output only).",
+        "runAfter": {
+          "Encode_997_to_AS2": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "method": "POST",
+          "uri": "@appsetting('Purchaser997EndpointUrl')",
+          "headers": "@body('Encode_997_to_AS2')?['messageHeaders']",
+          "body": "@base64ToBinary(body('Encode_997_to_AS2')?['messageContent']?['$content'])"
+        },
+        "trackedProperties": {
+          "ack997PostStatusCode": "@outputs('POST_997_to_purchaser')?['statusCode']"
+        }
+      },
+      "Record_997_Send_Failure": {
+        "type": "Compose",
+        "description": "Failure handler (build-lock routing): an HTTP-triggered workflow has no Service Bus lock to settle, so a failed/timed-out 997 send is captured here for run-history visibility. Runs only when POST_997_to_purchaser fails or times out.",
+        "runAfter": {
+          "POST_997_to_purchaser": ["FAILED", "TIMEDOUT"]
+        },
+        "inputs": {
+          "ack997SendFailure": "@result('POST_997_to_purchaser')"
+        }
+      },
+      "Transform_850_to_PO_Canonical": {
+        "type": "Xslt",
+        "description": "Transform the decoded 850 XML (first good transaction set) to the supplier canonical shape using the project map in Artifacts/Maps (map source LogicApp). goodMessages is a Learn-documented X12 Decode output; the per-item 'body' accessor is community-sourced and flagged for a designer/runtime round-trip.",
+        "runAfter": {
+          "Decode_X12_850": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "content": "@first(body('Decode_X12_850')?['goodMessages'])?['body']",
+          "map": {
+            "source": "LogicApp",
+            "name": "X12_850_006030_to_PO_Canonical.xslt"
+          }
+        }
+      },
+      "Parse_Canonical": {
+        "type": "Compose",
+        "description": "Convert the supplier canonical XML to JSON so scalar fields and the line-item collection can be passed to the SQL upsert proc. json() is a native WDL conversion. Field paths assume the PurchaseOrder canonical contract (root purchaseOrder); the lines collection is at lines/line after XML->JSON. Depends on Simon's map output shape (authored in parallel) - flagged.",
+        "runAfter": {
+          "Transform_850_to_PO_Canonical": ["SUCCEEDED"]
+        },
+        "inputs": "@json(body('Transform_850_to_PO_Canonical'))"
+      },
+      "Persist_Purchase_Order": {
+        "type": "ServiceProvider",
+        "description": "Normalized persist into the supplier-owned 'sup' schema via [sup].[usp_UpsertPurchaseOrder] (built-in SQL, managed identity, idempotent on PoNumber). The built-in SQL connector cannot pass a table-valued parameter, so line items are passed as a JSON string (LinesJson) for the proc to shred with OPENJSON (verified pattern, decisions.md).",
+        "runAfter": {
+          "Parse_Canonical": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "parameters": {
+            "storedProcedureName": "[sup].[usp_UpsertPurchaseOrder]",
+            "storedProcedureParameters": {
+              "PoNumber": "@outputs('Parse_Canonical')?['purchaseOrder']?['poNumber']",
+              "OrderDate": "@outputs('Parse_Canonical')?['purchaseOrder']?['orderDate']",
+              "RequestedDeliveryDate": "@outputs('Parse_Canonical')?['purchaseOrder']?['requestedDeliveryDate']",
+              "Currency": "@outputs('Parse_Canonical')?['purchaseOrder']?['currency']",
+              "BuyerId": "@outputs('Parse_Canonical')?['purchaseOrder']?['buyer']?['id']",
+              "BuyerName": "@outputs('Parse_Canonical')?['purchaseOrder']?['buyer']?['name']",
+              "SellerId": "@outputs('Parse_Canonical')?['purchaseOrder']?['seller']?['id']",
+              "SellerName": "@outputs('Parse_Canonical')?['purchaseOrder']?['seller']?['name']",
+              "ShipToName": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['name']",
+              "ShipToLine1": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['line1']",
+              "ShipToLine2": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['line2']",
+              "ShipToCity": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['city']",
+              "ShipToState": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['state']",
+              "ShipToPostalCode": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['postalCode']",
+              "ShipToCountry": "@outputs('Parse_Canonical')?['purchaseOrder']?['shipTo']?['country']",
+              "BillToName": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['name']",
+              "BillToLine1": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['line1']",
+              "BillToLine2": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['line2']",
+              "BillToCity": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['city']",
+              "BillToState": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['state']",
+              "BillToPostalCode": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['postalCode']",
+              "BillToCountry": "@outputs('Parse_Canonical')?['purchaseOrder']?['billTo']?['country']",
+              "LinesJson": "@{string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line'])}"
+            }
+          },
+          "serviceProviderConfiguration": {
+            "connectionName": "sql",
+            "operationId": "executeStoredProcedure",
+            "serviceProviderId": "/serviceProviders/sql"
+          }
         }
       }
     },
