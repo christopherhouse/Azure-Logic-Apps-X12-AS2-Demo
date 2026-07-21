@@ -16,8 +16,10 @@
     "sql": {
       "parameterSetName": "ManagedServiceIdentity",
       "parameterValues": {
-        "serverName": "@appsetting('sql__serverFqdn')",
-        "databaseName": "@appsetting('sql__databaseName')",
+        "serverName": "sql-jci-edi-dev-2vjolmqq.database.windows.net",
+        "databaseName": "sqldb-jci-edi-dev",
+        "managedIdentityType": "UserAssigned",
+        "managedIdentityClientId": "2df2da89-2f4d-419c-856d-57eec412054f",
         "authProvider": {
           "Type": "ManagedServiceIdentity"
         }
