@@ -78,10 +78,15 @@ GRANT EXECUTE ON SCHEMA::dbo TO PurchaserRole;
 PRINT 'Granted SELECT and EXECUTE to PurchaserRole';
 GO
 
--- SupplierRole: INSERT (write data) and EXECUTE (call stored procedures)
-GRANT INSERT ON SCHEMA::dbo TO SupplierRole;
-GRANT EXECUTE ON SCHEMA::dbo TO SupplierRole;
-PRINT 'Granted INSERT and EXECUTE to SupplierRole';
+-- SupplierRole: NO dbo grants. The supplier writes ONLY its own `sup` schema
+-- (see the sup grants below) to enforce the supplier-inbound trust boundary.
+-- Earlier revisions granted INSERT + EXECUTE on SCHEMA::dbo to SupplierRole; those
+-- are explicitly REVOKEd here so a redeploy against an already-granted database
+-- actually removes them (omitting a GRANT does not revoke a prior one). REVOKE is
+-- a no-op when the permission is absent, so this stays idempotent / re-runnable.
+REVOKE INSERT ON SCHEMA::dbo FROM SupplierRole;
+REVOKE EXECUTE ON SCHEMA::dbo FROM SupplierRole;
+PRINT 'Revoked dbo INSERT and EXECUTE from SupplierRole (supplier writes sup schema only)';
 GO
 
 -- ==============================================================================

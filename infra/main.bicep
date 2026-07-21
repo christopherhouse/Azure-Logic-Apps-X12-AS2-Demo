@@ -73,7 +73,9 @@ var supplierIaCallbackSecretName = 'supplier-ia-callback-url'
 // KV secret holding the PURCHASER 997 receive endpoint (callback) URL — the supplier's outbound AS2 POST
 // target for the 997. Injected in CI's non-interleaved dual-callback phase (design §5.2). LOCKED name.
 var purchaser997EndpointSecretName = 'purchaser-997-endpoint-url'
-// Supplier IA agreement names (Simon D-997-3, LOCKED). The supplier workflow reads these via @appsetting(...).
+// Supplier IA agreement names (Simon D-997-3, LOCKED). The 997 SEND name is read by the workflow via
+// @appsetting(X12SendAgreementName); the 850 RECEIVE name is informational only (x12Decode auto-resolves
+// the receive agreement from the ISA/GS envelope — no agreement-name app setting is provisioned for it).
 var supplierX12ReceiveAgreementName = 'Supplier-Purchaser-X12-850'
 var supplierX12SendAgreementName = 'Supplier-Purchaser-X12-997'
 var supplierAs2AgreementName = 'Supplier-Purchaser-AS2'
@@ -280,7 +282,6 @@ module supplierCompute 'compute/logicapp-bundle.bicep' = {
     keyVaultUri: keyVault.outputs.uri
     integrationAccountCallbackSecretName: supplierIaCallbackSecretName
     purchaser997EndpointSecretName: purchaser997EndpointSecretName
-    x12ReceiveAgreementName: supplierX12ReceiveAgreementName
     x12SendAgreementName: supplierX12SendAgreementName
     enableOpenTelemetry: true
   }

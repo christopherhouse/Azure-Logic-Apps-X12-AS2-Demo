@@ -80,10 +80,6 @@ by the supplier app setting `Purchaser997EndpointUrl` (the outbound AS2 POST tar
 omit (purchaser is receive-only). Injected post-deploy by CI in the non-interleaved dual-callback phase.''')
 param purchaser997EndpointSecretName string = ''
 
-@description('''X12 RECEIVE agreement name (supplier inbound 850), surfaced as app setting
-`X12ReceiveAgreementName` and read by the supplier workflow via @appsetting(...). Empty => omit.''')
-param x12ReceiveAgreementName string = ''
-
 @description('''X12 SEND agreement name (supplier outbound 997), surfaced as app setting
 `X12SendAgreementName` and read by the supplier workflow's X12 Encode via @appsetting(...). Empty => omit.''')
 param x12SendAgreementName string = ''
@@ -286,15 +282,10 @@ var purchaser997EndpointAppSettings = empty(purchaser997EndpointSecretName) ? []
   }
 ]
 
-// Supplier X12 agreement names (design §6.1 / Simon D-997-3): the workflow resolves the 850 RECEIVE
-// (X12 Decode) and 997 SEND (X12 Encode) agreements by name via @appsetting(...), so they can be
-// renamed without a workflow edit.
-var x12ReceiveAgreementAppSettings = empty(x12ReceiveAgreementName) ? [] : [
-  {
-    name: 'X12ReceiveAgreementName'
-    value: x12ReceiveAgreementName
-  }
-]
+// Supplier X12 agreement name (design §6.1 / Simon D-997-3): the workflow resolves the 997 SEND
+// (X12 Encode) agreement by name via @appsetting(...), so it can be renamed without a workflow edit.
+// The 850 RECEIVE (X12 Decode) agreement is NOT surfaced: the built-in x12Decode action auto-resolves
+// the receive agreement from the ISA/GS envelope via the linked IA and takes no agreement-name param.
 var x12SendAgreementAppSettings = empty(x12SendAgreementName) ? [] : [
   {
     name: 'X12SendAgreementName'
@@ -302,7 +293,7 @@ var x12SendAgreementAppSettings = empty(x12SendAgreementName) ? [] : [
   }
 ]
 
-var allAppSettings = concat(baseAppSettings, telemetryAppSettings, iaLinkAppSettings, supplierEndpointAppSettings, x12AgreementAppSettings, purchaser997EndpointAppSettings, x12ReceiveAgreementAppSettings, x12SendAgreementAppSettings)
+var allAppSettings = concat(baseAppSettings, telemetryAppSettings, iaLinkAppSettings, supplierEndpointAppSettings, x12AgreementAppSettings, purchaser997EndpointAppSettings, x12SendAgreementAppSettings)
 
 // ============================================================================
 // LOGIC APP STANDARD (empty) — app settings authored inline (#16)
