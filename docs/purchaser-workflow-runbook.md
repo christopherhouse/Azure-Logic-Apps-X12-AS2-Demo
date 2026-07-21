@@ -21,6 +21,8 @@
 
 See [`end-to-end-flow.md`](end-to-end-flow.md) for the flow diagram.
 
+> **Supplier receive + 997 return:** the supplier has now been upgraded from this stub to a full inbound pipeline that processes the 850, persists it, and returns a 997. That path is authored but not yet live-verified. See [`docs/supplier-workflow-runbook.md`](supplier-workflow-runbook.md).
+
 ## How to run
 
 Preconditions:

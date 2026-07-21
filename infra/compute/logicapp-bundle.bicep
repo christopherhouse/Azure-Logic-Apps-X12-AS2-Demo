@@ -74,6 +74,16 @@ param supplierEndpointSecretName string = ''
 @description('X12 SEND agreement name, surfaced as app setting X12AgreementName and read by the workflow via @appsetting(...) (design §5.4). Empty => omit.')
 param x12AgreementName string = ''
 
+// --- Supplier-inbound 997 epic app settings (design §6.1, LOCKED build-wave contract) ---
+@description('''Key Vault secret NAME holding the PURCHASER 997 receive endpoint (callback) URL, referenced
+by the supplier app setting `Purchaser997EndpointUrl` (the outbound AS2 POST target for the 997). Empty =>
+omit (purchaser is receive-only). Injected post-deploy by CI in the non-interleaved dual-callback phase.''')
+param purchaser997EndpointSecretName string = ''
+
+@description('''X12 SEND agreement name (supplier outbound 997), surfaced as app setting
+`X12SendAgreementName` and read by the supplier workflow's X12 Encode via @appsetting(...). Empty => omit.''')
+param x12SendAgreementName string = ''
+
 @description('Enable Workflows-runtime OpenTelemetry export via AzureFunctionsJobHost__telemetryMode=OpenTelemetry (design §7). host.json carries the AI v2 version switch.')
 param enableOpenTelemetry bool = true
 
@@ -262,7 +272,28 @@ var x12AgreementAppSettings = empty(x12AgreementName) ? [] : [
   }
 ]
 
-var allAppSettings = concat(baseAppSettings, telemetryAppSettings, iaLinkAppSettings, supplierEndpointAppSettings, x12AgreementAppSettings)
+// Supplier outbound AS2 POST target for the 997 — the purchaser-inbound-997 callback URL (KV ref,
+// injected post-deploy in the non-interleaved dual-callback phase, design §5.2/§6.1). The workflow
+// reads @appsetting('Purchaser997EndpointUrl') (clean name, no `__url` — same lesson as SupplierAs2EndpointUrl).
+var purchaser997EndpointAppSettings = empty(purchaser997EndpointSecretName) ? [] : [
+  {
+    name: 'Purchaser997EndpointUrl'
+    value: '@Microsoft.KeyVault(SecretUri=${keyVaultUri}secrets/${purchaser997EndpointSecretName})'
+  }
+]
+
+// Supplier X12 agreement name (design §6.1 / Simon D-997-3): the workflow resolves the 997 SEND
+// (X12 Encode) agreement by name via @appsetting(...), so it can be renamed without a workflow edit.
+// The 850 RECEIVE (X12 Decode) agreement is NOT surfaced: the built-in x12Decode action auto-resolves
+// the receive agreement from the ISA/GS envelope via the linked IA and takes no agreement-name param.
+var x12SendAgreementAppSettings = empty(x12SendAgreementName) ? [] : [
+  {
+    name: 'X12SendAgreementName'
+    value: x12SendAgreementName
+  }
+]
+
+var allAppSettings = concat(baseAppSettings, telemetryAppSettings, iaLinkAppSettings, supplierEndpointAppSettings, x12AgreementAppSettings, purchaser997EndpointAppSettings, x12SendAgreementAppSettings)
 
 // ============================================================================
 // LOGIC APP STANDARD (empty) — app settings authored inline (#16)

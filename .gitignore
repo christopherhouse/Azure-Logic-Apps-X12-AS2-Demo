@@ -12,3 +12,5 @@
 # Compiled ARM output from 'az bicep build'
 infra/main.json
 infra/integration-account/ia-content.json
+infra/integration-account/ia-content-supplier.json
+infra/compute/logicapp-bundle.json

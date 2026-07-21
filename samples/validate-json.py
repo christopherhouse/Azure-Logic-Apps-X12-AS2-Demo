@@ -47,8 +47,11 @@ def main():
     validator = Draft202012Validator(schema, format_checker=FormatChecker())
 
     results = [
-        check(validator, "purchase-order.sample.json", expect_valid=True),
-        check(validator, "purchase-order.invalid.json", expect_valid=False),
+        check(validator, "purchase-order.sample.json",    expect_valid=True),
+        check(validator, "purchase-order-e2e-test.json",  expect_valid=True),   # 2-line smoke fixture
+        check(validator, "purchase-order-1line.json",     expect_valid=True),   # single-line supplier fixture
+        check(validator, "purchase-order-3line.json",     expect_valid=True),   # three-line supplier fixture
+        check(validator, "purchase-order.invalid.json",   expect_valid=False),
     ]
     sys.exit(0 if all(results) else 1)
 

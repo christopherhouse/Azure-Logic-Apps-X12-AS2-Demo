@@ -1,0 +1,60 @@
+{
+  "purchaseOrder": {
+    "poNumber": "PO-E2E-3LINE-001",
+    "orderDate": "2026-07-21",
+    "requestedDeliveryDate": "2026-08-04",
+    "currency": "USD",
+    "buyer": {
+      "id": "PURCHASER01",
+      "name": "Contoso Buying Co"
+    },
+    "seller": {
+      "id": "SUPPLIER01",
+      "name": "Fabrikam Supply Co"
+    },
+    "shipTo": {
+      "name": "Contoso Test Dock",
+      "line1": "100 Test Dock Rd",
+      "line2": null,
+      "city": "Tacoma",
+      "state": "WA",
+      "postalCode": "98402",
+      "country": "US"
+    },
+    "billTo": {
+      "name": "Contoso AP Test",
+      "line1": "1 Contoso Plaza",
+      "line2": "Suite 400",
+      "city": "Redmond",
+      "state": "WA",
+      "postalCode": "98052",
+      "country": "US"
+    },
+    "lines": [
+      {
+        "lineNumber": 1,
+        "sku": "QA-MULTI-001",
+        "description": "QA blue widget",
+        "quantity": 50,
+        "uom": "EA",
+        "unitPrice": 8.75
+      },
+      {
+        "lineNumber": 2,
+        "sku": "QA-MULTI-002",
+        "description": "QA steel bracket",
+        "quantity": 200,
+        "uom": "EA",
+        "unitPrice": 1.5
+      },
+      {
+        "lineNumber": 3,
+        "sku": "QA-MULTI-003",
+        "description": "QA rubber gasket",
+        "quantity": 1000,
+        "uom": "EA",
+        "unitPrice": 0.25
+      }
+    ]
+  }
+}

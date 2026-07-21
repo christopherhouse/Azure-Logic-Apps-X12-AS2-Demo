@@ -1,0 +1,78 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Http",
+        "description": "SAS-signed HTTP trigger that receives the supplier's AS2 997 POST. Trigger name 'manual' so CI can extract this trigger's callback URL and inject it into the supplier app setting Purchaser997EndpointUrl (KV ref). Body JSON schema left empty because AS2/X12 content arrives as flat file.",
+        "inputs": {
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Decode_AS2": {
+        "type": "AS2Decode",
+        "description": "AS2 (v2) built-in Decode: decrypt + verify the supplier's signature against the purchaser AS2 receive agreement 'Purchaser-Supplier-AS2' (resolved by AS2-From/AS2-To in the message headers). Produces the base64 decoded 997 payload and a signed synchronous MDN to return in the HTTP Response. Native in-app action (type AS2Decode, no serviceProviderConfiguration, no connections.json entry).",
+        "runAfter": {},
+        "inputs": {
+          "messageToDecode": "@triggerOutputs()?['body']",
+          "messageHeaders": "@triggerOutputs()?['headers']"
+        },
+        "trackedProperties": {
+          "mdnGenerated": "@not(empty(body('Decode_AS2')?['outgoingMdnContent']))"
+        }
+      },
+      "Respond_With_MDN": {
+        "type": "Response",
+        "kind": "Http",
+        "description": "Return the signed synchronous MDN (headers + content) from Decode_AS2 with HTTP 200 so the supplier's outbound AS2 997 POST succeeds. Placed immediately after Decode_AS2 per the MS Learn B2B tutorial.",
+        "runAfter": {
+          "Decode_AS2": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": "@body('Decode_AS2')?['outgoingMdnContent']?['outgoingMdnHeaders']",
+          "body": "@body('Decode_AS2')?['outgoingMdnContent']?['messageContent']"
+        }
+      },
+      "Decoded_997_FlatFile": {
+        "type": "Compose",
+        "description": "The AS2 (v2) decoded payload is base64-encoded content. Convert it to the X12 997 flat-file string for X12 Decode (base64ToString per MS Learn B2B 'Add the decode X12' Standard example).",
+        "runAfter": {
+          "Respond_With_MDN": ["SUCCEEDED"]
+        },
+        "inputs": "@base64ToString(body('Decode_AS2')?['messageContent'])"
+      },
+      "Decode_X12_997": {
+        "type": "X12Decode",
+        "description": "X12 built-in Decode of the 997 flat file (operationId x12Decode, JSON param messageToDecode). Resolves the purchaser X12 receive agreement 'Purchaser-Supplier-X12-997' by ISA/GS identities from the linked Integration Account and validates against schema X12_00603_997. You do not ACK an ACK (needFunctionalAcknowledgement=false). Native in-app action (type X12Decode).",
+        "runAfter": {
+          "Decoded_997_FlatFile": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "messageToDecode": "@outputs('Decoded_997_FlatFile')"
+        }
+      },
+      "Record_997_Status": {
+        "type": "Compose",
+        "description": "Record/log the inbound functional-acknowledgment status for run-history visibility. Inputs capture the decoded 997 good/bad message sets (goodMessages is a Learn-documented X12 Decode output); tracked properties reference only this action's own output, per the trackedProperties scoping rule.",
+        "runAfter": {
+          "Decode_X12_997": ["SUCCEEDED"]
+        },
+        "inputs": {
+          "functionalAck": "@body('Decode_X12_997')?['goodMessages']",
+          "rejected": "@body('Decode_X12_997')?['badMessages']"
+        },
+        "trackedProperties": {
+          "functionalAckReceived": "@not(empty(outputs('Record_997_Status')?['functionalAck']))",
+          "functionalAckRejected": "@not(empty(outputs('Record_997_Status')?['rejected']))"
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

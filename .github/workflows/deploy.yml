@@ -140,6 +140,17 @@ jobs:
           echo "supplierAs2EndpointSecret=$SUPPLIER_AS2_ENDPOINT_SECRET" >> $GITHUB_OUTPUT
           echo "x12AgreementName=$X12_AGREEMENT_NAME" >> $GITHUB_OUTPUT
           echo "supplierAckWorkflow=$SUPPLIER_ACK_WORKFLOW" >> $GITHUB_OUTPUT
+
+          # Supplier-inbound 997 epic outputs (LOCKED build-wave contract): supplier IA content deploy,
+          # supplier IA link, and the non-interleaved dual callback-URL injection (design §5.2).
+          SUPPLIER_IA_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierIntegrationAccountName.value')
+          SUPPLIER_IA_CALLBACK_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.supplierIaCallbackSecretName.value')
+          PURCHASER_997_ENDPOINT_SECRET=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaser997EndpointSecretName.value')
+          PURCHASER_997_WORKFLOW=$(echo $DEPLOYMENT_OUTPUT | jq -r '.purchaserInbound997WorkflowName.value')
+          echo "supplierIaName=$SUPPLIER_IA_NAME" >> $GITHUB_OUTPUT
+          echo "supplierIaCallbackSecret=$SUPPLIER_IA_CALLBACK_SECRET" >> $GITHUB_OUTPUT
+          echo "purchaser997EndpointSecret=$PURCHASER_997_ENDPOINT_SECRET" >> $GITHUB_OUTPUT
+          echo "purchaser997Workflow=$PURCHASER_997_WORKFLOW" >> $GITHUB_OUTPUT
           
           echo "✅ Deployment outputs captured"
         shell: bash
@@ -193,11 +204,17 @@ jobs:
             if (-not (Get-Module -ListAvailable SqlServer)) { Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber }
             Import-Module SqlServer
             $token = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
-            foreach ($f in @('infra/sql/schema/010-tables.sql','infra/sql/schema/020-usp-upsert.sql')) {
+            # dbo (purchaser) DDL first, then the supplier-owned `sup` schema DDL + proc (supplier-inbound 997
+            # epic, LOCKED #3). Same temp-firewall-rule + Invoke-Sqlcmd pattern; ordering: sup tables before proc.
+            foreach ($f in @(
+                'infra/sql/schema/010-tables.sql',
+                'infra/sql/schema/020-usp-upsert.sql',
+                'infra/sql/schema/030-sup-tables.sql',
+                'infra/sql/schema/040-usp-upsert-supplier.sql')) {
               Write-Host "Applying $f"
               Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -InputFile $f -ErrorAction Stop
             }
-            Write-Host "SQL DDL applied (tables + upsert proc)"
+            Write-Host "SQL DDL applied (dbo tables + upsert proc; sup tables + supplier upsert proc)"
           }
           finally {
             Write-Host "Removing temporary SQL firewall rule $ruleName"
@@ -236,6 +253,39 @@ jobs:
             --body "$BODY" 1>/dev/null
           echo "✅ Schema X12_00603_850 registered via contentLink"
 
+      - name: Post-Deploy - Register SUPPLIER X12 850 schema via REST contentLink (>2 MB)
+        id: schemasupplier
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Mirror of the purchaser 850 registration for the SUPPLIER IA: the 2.15 MB X12_00603_850.xsd
+          # exceeds the inline `content` limit and the ARM schema resource exposes no writable contentLink,
+          # so upload to supplier storage + register via the Logic REST API contentLink. The supplier X12
+          # RECEIVE (850) agreement resolves this schema BY NAME, so it must exist before ia-content-supplier.
+          # (The 31 KB 997 xsd is registered INLINE by Bicep — no CI step needed.)
+          RG='${{ steps.deploy.outputs.rgSupplier }}'
+          STORAGE='${{ steps.deploy.outputs.supplierStorageName }}'
+          IA='${{ steps.deploy.outputs.supplierIaName }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          XSD='infra/integration-account/schemas/X12_00603_850.xsd'
+          KEY=$(az storage account keys list -g "$RG" -n "$STORAGE" --query '[0].value' -o tsv)
+          az storage container create --account-name "$STORAGE" --account-key "$KEY" --name ia-artifacts --only-show-errors 1>/dev/null
+          az storage blob upload --account-name "$STORAGE" --account-key "$KEY" --container-name ia-artifacts \
+            --name X12_00603_850.xsd --file "$XSD" --overwrite --only-show-errors 1>/dev/null
+          EXPIRY=$(date -u -d '2 hours' '+%Y-%m-%dT%H:%MZ')
+          SAS=$(az storage blob generate-sas --account-name "$STORAGE" --account-key "$KEY" \
+            --container-name ia-artifacts --name X12_00603_850.xsd --permissions r --expiry "$EXPIRY" -o tsv)
+          BLOB_URL="https://${STORAGE}.blob.core.windows.net/ia-artifacts/X12_00603_850.xsd?${SAS}"
+          SCHEMA_ID="/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Logic/integrationAccounts/${IA}/schemas/X12_00603_850"
+          LOCATION=$(az group show -n "$RG" --query location -o tsv)
+          BODY=$(jq -n --arg uri "$BLOB_URL" --arg loc "$LOCATION" \
+            '{location:$loc, properties:{schemaType:"Xml", contentType:"application/xml", contentLink:{uri:$uri}}}')
+          az rest --method put \
+            --url "https://management.azure.com${SCHEMA_ID}?api-version=2019-05-01" \
+            --headers 'Content-Type=application/json' \
+            --body "$BODY" 1>/dev/null
+          echo "✅ Supplier schema X12_00603_850 registered via contentLink"
+
       - name: Post-Deploy - Deploy Integration Account content (partners, certs, agreements)
         id: iacontent
         shell: bash
@@ -249,21 +299,63 @@ jobs:
           # cert-gen (design §8 #8) is a documented OUT-OF-BAND prerequisite. Guard gracefully:
           # if the AS2 certs are not yet in Key Vault, skip IA content and the downstream EDI
           # steps so an infra-only run stays green.
-          SUP_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-encryption --query cer -o tsv 2>/dev/null || true)
-          PUR_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-signing --query cer -o tsv 2>/dev/null || true)
-          if [ -z "$SUP_CER" ] || [ -z "$PUR_CER" ]; then
-            echo "::warning::AS2 certs not in Key Vault ($KV_NAME). Run cert-gen (design §8 #8) before EDI content deploy. Skipping IA content + supplier-URL injection."
+          SUP_ENC_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-encryption --query cer -o tsv 2>/dev/null || true)
+          PUR_SIGN_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-signing --query cer -o tsv 2>/dev/null || true)
+          # Receive-side leaf certs (supplier-inbound 997 epic, design §4.1). Present => activate the
+          # purchaser AS2 receive block + build the supplier IA content.
+          SUP_SIGN_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-signing --query cer -o tsv 2>/dev/null || true)
+          PUR_ENC_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-encryption --query cer -o tsv 2>/dev/null || true)
+          if [ -z "$SUP_ENC_CER" ] || [ -z "$PUR_SIGN_CER" ]; then
+            echo "::warning::AS2 send-side certs not in Key Vault ($KV_NAME). Run cert-gen (design §8 #8) before EDI content deploy. Skipping IA content + callback injection."
             echo "ediReady=false" >> $GITHUB_OUTPUT
+            echo "supplierEdiReady=false" >> $GITHUB_OUTPUT
             exit 0
+          fi
+          # The purchaser AS2 receive block + the supplier IA both require all 4 leaf certs. When only the
+          # 2 send-side certs exist, deploy the purchaser send content but leave the receive side inactive
+          # (the Bicep auto-computes activateAs2Receive from the two receive-cert params being non-empty).
+          SUPPLIER_EDI_READY=true
+          if [ -z "$SUP_SIGN_CER" ] || [ -z "$PUR_ENC_CER" ]; then
+            echo "::warning::AS2 receive-side certs (supplier-signing / purchaser-encryption) not in Key Vault. Purchaser send content deploys; supplier IA content + AS2 receive activation are SKIPPED."
+            SUPPLIER_EDI_READY=false
           fi
           az deployment group create -g "$RG" \
             --template-file infra/integration-account/ia-content.bicep \
             --parameters integrationAccountName="$IA" keyVaultResourceId="$KV_ID" \
-                         supplierEncryptionPublicCertificate="$SUP_CER" \
-                         purchaserSigningPublicCertificate="$PUR_CER" x12AgreementName="$X12_NAME" \
+                         supplierEncryptionPublicCertificate="$SUP_ENC_CER" \
+                         purchaserSigningPublicCertificate="$PUR_SIGN_CER" \
+                         supplierSigningPublicCertificate="$SUP_SIGN_CER" \
+                         purchaserEncryptionPublicCertificate="$PUR_ENC_CER" \
+                         x12AgreementName="$X12_NAME" \
             1>/dev/null
           echo "ediReady=true" >> $GITHUB_OUTPUT
-          echo "✅ Integration Account content deployed (partners, certs, agreements)"
+          echo "supplierEdiReady=$SUPPLIER_EDI_READY" >> $GITHUB_OUTPUT
+          echo "✅ Purchaser Integration Account content deployed (partners, certs, agreements; receive-side activated=$SUPPLIER_EDI_READY)"
+
+      - name: Post-Deploy - Deploy SUPPLIER Integration Account content (partners, certs, agreements)
+        if: steps.iacontent.outputs.supplierEdiReady == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgSupplier }}'
+          IA='${{ steps.deploy.outputs.supplierIaName }}'
+          KV_ID='${{ steps.deploy.outputs.keyVaultId }}'
+          KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
+          # All 4 leaf public certs (private certs = supplier-encryption + supplier-signing carry a KV key ref;
+          # public = purchaser-signing + purchaser-encryption). Presence is guaranteed by supplierEdiReady.
+          SUP_ENC_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-encryption --query cer -o tsv)
+          SUP_SIGN_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-supplier-signing --query cer -o tsv)
+          PUR_SIGN_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-signing --query cer -o tsv)
+          PUR_ENC_CER=$(az keyvault certificate show --vault-name "$KV_NAME" --name demo-as2-purchaser-encryption --query cer -o tsv)
+          az deployment group create -g "$RG" \
+            --template-file infra/integration-account/ia-content-supplier.bicep \
+            --parameters integrationAccountName="$IA" keyVaultResourceId="$KV_ID" \
+                         supplierEncryptionPublicCertificate="$SUP_ENC_CER" \
+                         supplierSigningPublicCertificate="$SUP_SIGN_CER" \
+                         purchaserSigningPublicCertificate="$PUR_SIGN_CER" \
+                         purchaserEncryptionPublicCertificate="$PUR_ENC_CER" \
+            1>/dev/null
+          echo "✅ Supplier Integration Account content deployed (partners, 997 inline schema, 4 certs, 850 recv/997 send/AS2 agreements)"
 
       - name: Post-Deploy - Publish IA callback URL to Key Vault
         if: steps.iacontent.outputs.ediReady == 'true'
@@ -285,6 +377,27 @@ jobs:
           az keyvault secret set --vault-name "$KV_NAME" --name "$SECRET" --value "$CALLBACK" --only-show-errors 1>/dev/null
           echo "✅ IA callback URL stored in Key Vault secret $SECRET"
 
+      - name: Post-Deploy - Publish SUPPLIER IA callback URL to Key Vault
+        if: steps.iacontent.outputs.supplierEdiReady == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG='${{ steps.deploy.outputs.rgSupplier }}'
+          IA='${{ steps.deploy.outputs.supplierIaName }}'
+          KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
+          SECRET='${{ steps.deploy.outputs.supplierIaCallbackSecret }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          IA_ID="/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Logic/integrationAccounts/${IA}"
+          # Mirror of the purchaser IA callback: listCallbackUrl returns a SAS-bearing URL → store as a KV
+          # secret referenced by the supplier WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL app setting (KV ref,
+          # wired in Bicep). Links the supplier app to its OWN IA so AS2/X12 Decode + Encode resolve agreements.
+          CALLBACK=$(az rest --method post \
+            --url "https://management.azure.com${IA_ID}/listCallbackUrl?api-version=2019-05-01" \
+            --headers 'Content-Type=application/json' \
+            --body '{"keyType":"Primary"}' --query value -o tsv)
+          az keyvault secret set --vault-name "$KV_NAME" --name "$SECRET" --value "$CALLBACK" --only-show-errors 1>/dev/null
+          echo "✅ Supplier IA callback URL stored in Key Vault secret $SECRET"
+
       - name: Post-Deploy - Deploy SUPPLIER workflow (first, design §8)
         shell: bash
         run: |
@@ -305,27 +418,53 @@ jobs:
           az functionapp deployment source config-zip -g "$RG" -n "$APP" --src purchaser-app.zip 1>/dev/null
           echo "✅ Purchaser workflow deployed"
 
-      - name: Post-Deploy - Supplier URL injection -> Key Vault -> restart purchaser (design §6)
+      - name: Post-Deploy - Non-interleaved dual callback-URL injection (design §5.2, LOCKED #4)
         if: steps.iacontent.outputs.ediReady == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          # LOCKED #4 / design §5.2 — break the callback-URL deadlock by DECOUPLING "deploy the workflow"
+          # from "inject the app setting". BOTH workflows are already deployed (preceding two steps), so:
+          #   1. read BOTH trigger callback URLs, 2. write BOTH KV secrets, 3. restart BOTH apps.
+          # NEVER deploy→inject one app at a time. The 997 (supplier→purchaser) half runs only when the
+          # receive-side certs are present (supplierEdiReady); the 850 (purchaser→supplier) half always runs.
           RG_SUP='${{ steps.deploy.outputs.rgSupplier }}'
           RG_PUR='${{ steps.deploy.outputs.rgPurchaser }}'
           SUP_APP='${{ steps.deploy.outputs.supplierLogicAppName }}'
           PUR_APP='${{ steps.deploy.outputs.purchaserLogicAppName }}'
-          WF='${{ steps.deploy.outputs.supplierAckWorkflow }}'
+          SUP_WF='${{ steps.deploy.outputs.supplierAckWorkflow }}'
+          PUR_WF='${{ steps.deploy.outputs.purchaser997Workflow }}'
           KV_NAME='${{ steps.deploy.outputs.keyVaultName }}'
-          SECRET='${{ steps.deploy.outputs.supplierAs2EndpointSecret }}'
+          SUP_AS2_SECRET='${{ steps.deploy.outputs.supplierAs2EndpointSecret }}'
+          PUR_997_SECRET='${{ steps.deploy.outputs.purchaser997EndpointSecret }}'
+          SUPPLIER_EDI_READY='${{ steps.iacontent.outputs.supplierEdiReady }}'
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
-          # listCallbackUrl on the supplier inbound-ack manual trigger (Logic App Standard runtime API).
-          URL=$(az rest --method post \
-            --url "https://management.azure.com/subscriptions/${SUB}/resourceGroups/${RG_SUP}/providers/Microsoft.Web/sites/${SUP_APP}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${WF}/triggers/manual/listCallbackUrl?api-version=2022-03-01" \
+
+          # --- 1. READ both trigger callback URLs (Logic App Standard runtime API; depends only on the
+          #        trigger/workflow existing, NOT on any downstream app setting) -------------------------
+          SUP_URL=$(az rest --method post \
+            --url "https://management.azure.com/subscriptions/${SUB}/resourceGroups/${RG_SUP}/providers/Microsoft.Web/sites/${SUP_APP}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${SUP_WF}/triggers/manual/listCallbackUrl?api-version=2022-03-01" \
             --query value -o tsv)
-          az keyvault secret set --vault-name "$KV_NAME" --name "$SECRET" --value "$URL" --only-show-errors 1>/dev/null
-          # SupplierAs2Endpoint__url purchaser app setting is a KV reference (wired in Bicep) -> restart to resolve.
+          if [ "$SUPPLIER_EDI_READY" = "true" ]; then
+            PUR_URL=$(az rest --method post \
+              --url "https://management.azure.com/subscriptions/${SUB}/resourceGroups/${RG_PUR}/providers/Microsoft.Web/sites/${PUR_APP}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${PUR_WF}/triggers/manual/listCallbackUrl?api-version=2022-03-01" \
+              --query value -o tsv)
+          fi
+
+          # --- 2. WRITE both KV secrets (referenced by the KV-backed app settings, wired in Bicep) --------
+          az keyvault secret set --vault-name "$KV_NAME" --name "$SUP_AS2_SECRET" --value "$SUP_URL" --only-show-errors 1>/dev/null
+          echo "✅ Supplier AS2 endpoint (850 target) stored in $SUP_AS2_SECRET"
+          if [ "$SUPPLIER_EDI_READY" = "true" ]; then
+            az keyvault secret set --vault-name "$KV_NAME" --name "$PUR_997_SECRET" --value "$PUR_URL" --only-show-errors 1>/dev/null
+            echo "✅ Purchaser 997 endpoint (997 target) stored in $PUR_997_SECRET"
+          else
+            echo "::warning::Receive-side certs absent — purchaser-inbound-997 endpoint NOT injected (997 return leg inactive)."
+          fi
+
+          # --- 3. RESTART both apps so their @Microsoft.KeyVault(...) app settings resolve ---------------
           az functionapp restart -g "$RG_PUR" -n "$PUR_APP" 1>/dev/null
-          echo "✅ Supplier AS2 endpoint injected into Key Vault; purchaser restarted"
+          az functionapp restart -g "$RG_SUP" -n "$SUP_APP" 1>/dev/null
+          echo "✅ Dual callback-URL injection complete; both apps restarted"
 
       - name: Deployment complete
         run: |
