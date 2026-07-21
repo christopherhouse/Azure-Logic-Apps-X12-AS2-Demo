@@ -1,0 +1,44 @@
+{
+  "purchaseOrder": {
+    "poNumber": "PO-E2E-1LINE-001",
+    "orderDate": "2026-07-21",
+    "requestedDeliveryDate": "2026-08-04",
+    "currency": "USD",
+    "buyer": {
+      "id": "PURCHASER01",
+      "name": "Contoso Buying Co"
+    },
+    "seller": {
+      "id": "SUPPLIER01",
+      "name": "Fabrikam Supply Co"
+    },
+    "shipTo": {
+      "name": "Contoso Test Dock",
+      "line1": "100 Test Dock Rd",
+      "line2": null,
+      "city": "Tacoma",
+      "state": "WA",
+      "postalCode": "98402",
+      "country": "US"
+    },
+    "billTo": {
+      "name": "Contoso AP Test",
+      "line1": "1 Contoso Plaza",
+      "line2": "Suite 400",
+      "city": "Redmond",
+      "state": "WA",
+      "postalCode": "98052",
+      "country": "US"
+    },
+    "lines": [
+      {
+        "lineNumber": 1,
+        "sku": "QA-SINGLE-001",
+        "description": "QA single-line widget",
+        "quantity": 10,
+        "uom": "EA",
+        "unitPrice": 15.0
+      }
+    ]
+  }
+}

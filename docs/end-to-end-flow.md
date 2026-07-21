@@ -1,8 +1,9 @@
-# End-to-End EDI Flow — Purchaser PO to Supplier AS2
+# End-to-End EDI Flow — Purchaser PO, Supplier 850 Receive, and 997 Return
 
-> **Status (2026-07-20T14:35:00-05:00):** Verified live through supplier HTTP 200. Service Bus settlement remains open.
+> **Status — purchaser send path (2026-07-20T14:35:00-05:00):** Verified live through supplier HTTP 200. Service Bus settlement remains open.
+> **Status — supplier receive + 997 return path (2026-07-21):** AUTHORED on branch `feature/supplier-inbound-997-workflow`; not yet deployed or live-verified. Workflow `.json` files, Bicep, SQL DDL, and the XSLT map are committed on this branch but no live round-trip has been executed. See §2 and the authoritative design at [`docs/supplier-workflow-epic-design.md`](supplier-workflow-epic-design.md).
 
-## Flow
+## 1. Purchaser send path (live-verified)
 
 ```mermaid
 flowchart TD
@@ -14,7 +15,7 @@ flowchart TD
     F --> G["Encode_to_X12_850: agreement Purchaser-Supplier-X12"]
     G --> H["Encode_to_AS2: sign + encrypt + request sync MDN"]
     H --> I["POST_AS2_to_supplier: HTTP POST"]
-    I --> J["supplier-inbound-ack: HTTP 200 stub"]
+    I --> J["supplier-inbound-ack (was HTTP 200 stub at live-verification;\nnow full inbound pipeline — see §2)"]
     I --> K["Complete_Message (known issue)"]
     C -. failure .-> L["Dead_Letter_Message (known issue)"]
     D -. failure .-> L
@@ -24,7 +25,7 @@ flowchart TD
     I -. failure .-> L
 ```
 
-## Action-by-action notes
+### Action-by-action notes — purchaser send
 
 | Step | Runtime detail |
 |---|---|
