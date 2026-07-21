@@ -41,12 +41,12 @@ Steps:
    $namespace = 'sb-jci-edi-dev-2vjolmqq.servicebus.windows.net'
    $payload   = 'samples\purchase-order-e2e-test.json'
 
-   $token = az account get-access-token --resource 'https://servicebus.azure.net' --query accessToken -o tsv
-   curl.exe --fail-with-body -i -X POST "https://$namespace/purchase-orders.received/messages?timeout=60" `
-     -H "Authorization: Bearer $token" `
-     -H 'Content-Type: application/json' `
-     -H 'BrokerProperties: {"MessageId":"PO-E2E-07201052","CorrelationId":"PO-E2E-07201052","Label":"E2E"}' `
-     --data-binary "@$payload"
+   # az rest acquires and attaches the bearer token for --resource automatically.
+   az rest --method post `
+     --url "https://$namespace/purchase-orders.received/messages?timeout=60" `
+     --resource 'https://servicebus.azure.net' `
+     --headers 'Content-Type=application/json' 'BrokerProperties={"MessageId":"PO-E2E-07201052","CorrelationId":"PO-E2E-07201052","Label":"E2E"}' `
+     --body "@$payload"
    ```
 
    Preconditions for this to succeed: your CLI identity holds **Azure Service Bus Data Sender** on topic `purchase-orders.received`, and the purchaser UAMI holds **Azure Service Bus Data Receiver** on the same topic (see [`trading-partner-onboarding.md`](trading-partner-onboarding.md) / `.squad/decisions.md`). The `MessageId`/`CorrelationId` should be unique per run so redelivery and dedup are observable.
