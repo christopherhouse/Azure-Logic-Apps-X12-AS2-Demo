@@ -137,11 +137,11 @@
       },
       "Normalize_Lines": {
         "type": "Compose",
-        "description": "json(xml) collapses a single repeated <line> element to a JSON object instead of a one-element array, which would break OPENJSON(@LinesJson) in the proc. Force lines to ALWAYS be a JSON array: if lines/line already serializes as an array (starts with '['), pass it through; otherwise wrap the single object with array(). Handles both 1-line and N-line POs. Address groups (buyer/seller/shipTo/billTo) are always singular scalars, so they need no normalization.",
+        "description": "Simon's map emits <lines> as the repeating line element itself (one <lines> per PO1Loop1, each holding lineNumber/sku/description/quantity/uom/unitPrice) - there is NO <line> child. json(xml) therefore yields an array for a multi-line PO but collapses a single <lines> to a JSON object, which would break OPENJSON(@LinesJson) in the proc. Force lines to ALWAYS be a JSON array: if it already serializes as an array (starts with '['), pass it through; otherwise wrap the single object with array(). Handles both 1-line and N-line POs. Object keys match the proc's OPENJSON WITH paths ($.lineNumber/$.sku/$.description/$.quantity/$.uom/$.unitPrice). Address groups (buyer/seller/shipTo/billTo) are always singular scalars, so they need no normalization.",
         "runAfter": {
           "Parse_Canonical": ["SUCCEEDED"]
         },
-        "inputs": "@if(startsWith(string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line']), '['), outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line'], array(outputs('Parse_Canonical')?['purchaseOrder']?['lines']?['line']))"
+        "inputs": "@if(startsWith(string(outputs('Parse_Canonical')?['purchaseOrder']?['lines']), '['), outputs('Parse_Canonical')?['purchaseOrder']?['lines'], array(outputs('Parse_Canonical')?['purchaseOrder']?['lines']))"
       },
       "Persist_Purchase_Order": {
         "type": "ServiceProvider",
