@@ -34,7 +34,22 @@ Preconditions:
 Steps:
 
 1. Use fixture `samples/purchase-order-e2e-test.json`.
-2. Publish it with an AAD-token REST POST to the Service Bus topic messages endpoint. The tested approach was `az account get-access-token --resource https://servicebus.azure.net` plus REST `POST`; exact copy/paste command is **TBD — verify against `.squad/decisions.md`**.
+2. Publish it with an AAD-token REST POST to the Service Bus topic `messages` endpoint (no connection string). This sends the raw JSON as the message body. Verified live: this returns **HTTP 201 Created** and drives a purchaser run.
+
+   ```powershell
+   # Replace the namespace host with your environment's Service Bus FQDN.
+   $namespace = 'sb-jci-edi-dev-2vjolmqq.servicebus.windows.net'
+   $payload   = 'samples\purchase-order-e2e-test.json'
+
+   $token = az account get-access-token --resource 'https://servicebus.azure.net' --query accessToken -o tsv
+   curl.exe --fail-with-body -i -X POST "https://$namespace/purchase-orders.received/messages?timeout=60" `
+     -H "Authorization: Bearer $token" `
+     -H 'Content-Type: application/json' `
+     -H 'BrokerProperties: {"MessageId":"PO-E2E-07201052","CorrelationId":"PO-E2E-07201052","Label":"E2E"}' `
+     --data-binary "@$payload"
+   ```
+
+   Preconditions for this to succeed: your CLI identity holds **Azure Service Bus Data Sender** on topic `purchase-orders.received`, and the purchaser UAMI holds **Azure Service Bus Data Receiver** on the same topic (see [`trading-partner-onboarding.md`](trading-partner-onboarding.md) / `.squad/decisions.md`). The `MessageId`/`CorrelationId` should be unique per run so redelivery and dedup are observable.
 3. Open purchaser run history for `purchaser-po-to-as2`.
 4. Confirm these actions succeeded: `Parse_Purchase_Order`, `Persist_Purchase_Order`, `Compose_Canonical_Xml`, `Transform_to_X12_850_Xml`, `Encode_to_X12_850`, `Encode_to_AS2`, `POST_AS2_to_supplier`.
 5. Confirm `POST_AS2_to_supplier` has status code `200`.
