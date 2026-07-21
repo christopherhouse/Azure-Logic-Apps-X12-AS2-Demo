@@ -85,6 +85,32 @@ PRINT 'Granted INSERT and EXECUTE to SupplierRole';
 GO
 
 -- ==============================================================================
+-- SUPPLIER-OWNED `sup` SCHEMA GRANTS (supplier-inbound 997 epic, LOCKED #3)
+-- ==============================================================================
+-- The supplier persists the inbound 850 into its OWN `sup` schema (mirror tables +
+-- sup.usp_UpsertPurchaseOrder), kept distinct from dbo for a clean trust boundary.
+-- SupplierRole gets INSERT + EXECUTE on SCHEMA::sup.
+--
+-- The `sup` schema is created here (idempotent) so the GRANT below resolves even
+-- though this script runs BEFORE the sup DDL step (030-sup-tables.sql) in CI;
+-- 030 re-creates it idempotently. CREATE SCHEMA must be first in its batch → EXEC.
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'sup')
+BEGIN
+    EXEC (N'CREATE SCHEMA sup AUTHORIZATION dbo;');
+    PRINT 'Created schema: sup';
+END
+ELSE
+BEGIN
+    PRINT 'Schema already exists: sup';
+END
+GO
+
+GRANT INSERT ON SCHEMA::sup TO SupplierRole;
+GRANT EXECUTE ON SCHEMA::sup TO SupplierRole;
+PRINT 'Granted INSERT and EXECUTE on SCHEMA::sup to SupplierRole';
+GO
+
+-- ==============================================================================
 -- ADD USERS TO ROLES (idempotent)
 -- ==============================================================================
 

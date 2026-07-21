@@ -66,6 +66,22 @@ var supplierAs2EndpointSecretName = 'supplier-as2-endpoint-url'
 // and the value the workflow reads via @appsetting('X12AgreementName') (design §5.4 / Simon README §2.1).
 var x12AgreementName = 'Purchaser-Supplier-X12'
 
+// --- Supplier-inbound 997 epic (LOCKED build-wave contract) --------------------------------
+// KV secret holding the SUPPLIER Integration Account callback URL — links the supplier app to its IA
+// (WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL). Written by CI post-deploy (mirror of the purchaser IA).
+var supplierIaCallbackSecretName = 'supplier-ia-callback-url'
+// KV secret holding the PURCHASER 997 receive endpoint (callback) URL — the supplier's outbound AS2 POST
+// target for the 997. Injected in CI's non-interleaved dual-callback phase (design §5.2). LOCKED name.
+var purchaser997EndpointSecretName = 'purchaser-997-endpoint-url'
+// Supplier IA agreement names (Simon D-997-3, LOCKED). The supplier workflow reads these via @appsetting(...).
+var supplierX12ReceiveAgreementName = 'Supplier-Purchaser-X12-850'
+var supplierX12SendAgreementName = 'Supplier-Purchaser-X12-997'
+var supplierAs2AgreementName = 'Supplier-Purchaser-AS2'
+// Purchaser IA inbound-997 receive agreement name + the new purchaser 997 receive workflow (CI reads the
+// latter's `manual` trigger callback URL in the dual-callback phase). LOCKED names.
+var purchaserReceive997AgreementName = 'Purchaser-Supplier-X12-997'
+var purchaserInbound997WorkflowName = 'purchaser-inbound-997'
+
 // ============================================================================
 // MODULE: NAMING PRIMITIVES (#2)
 // ============================================================================
@@ -240,7 +256,9 @@ module purchaserCompute 'compute/logicapp-bundle.bicep' = {
 // ============================================================================
 // SUPPLIER COMPUTE BUNDLE (#14/#12, app settings #16) — rg-edi-supplier (Central US)
 // WS1 plan + empty Logic App Standard + storage + Free Integration Account, supplier UAMI attached.
-// Supplier is HTTP-only this epic (no EDI send agreements) — EDI app settings intentionally omitted.
+// Supplier-inbound 997 epic: the supplier now links to its OWN IA (WORKFLOW_INTEGRATION_ACCOUNT_CALLBACK_URL,
+// KV-ref) and carries the outbound 997 POST target (Purchaser997EndpointUrl, KV-ref, injected post-deploy)
+// plus the X12 receive (850) / send (997) agreement-name settings the workflow reads via @appsetting(...).
 // ============================================================================
 module supplierCompute 'compute/logicapp-bundle.bicep' = {
   name: 'deploy-supplier-compute'
@@ -258,6 +276,13 @@ module supplierCompute 'compute/logicapp-bundle.bicep' = {
     serviceBusFullyQualifiedNamespace: serviceBus.outputs.fullyQualifiedNamespace
     sqlServerFqdn: sqlServer.outputs.serverFqdn
     sqlDatabaseName: sqlServer.outputs.databaseName
+    // EDI receive/send agreements now live on the SUPPLIER IA — wire the KV-referenced EDI app settings.
+    keyVaultUri: keyVault.outputs.uri
+    integrationAccountCallbackSecretName: supplierIaCallbackSecretName
+    purchaser997EndpointSecretName: purchaser997EndpointSecretName
+    x12ReceiveAgreementName: supplierX12ReceiveAgreementName
+    x12SendAgreementName: supplierX12SendAgreementName
+    enableOpenTelemetry: true
   }
 }
 
@@ -339,3 +364,14 @@ output purchaserIaCallbackSecretName string = purchaserIaCallbackSecretName
 output supplierAs2EndpointSecretName string = supplierAs2EndpointSecretName
 output x12AgreementName string = x12AgreementName
 output supplierInboundAckWorkflowName string = 'supplier-inbound-ack'
+
+// Supplier-inbound 997 epic outputs (LOCKED build-wave contract) — CI needs these for the supplier IA
+// content deploy, the supplier IA link, and the non-interleaved dual callback-URL injection (design §5.2).
+output supplierIntegrationAccountName string = names.outputs.supplierIntegrationAccount
+output supplierIaCallbackSecretName string = supplierIaCallbackSecretName
+output purchaser997EndpointSecretName string = purchaser997EndpointSecretName
+output supplierX12ReceiveAgreementName string = supplierX12ReceiveAgreementName
+output supplierX12SendAgreementName string = supplierX12SendAgreementName
+output supplierAs2AgreementName string = supplierAs2AgreementName
+output purchaserReceive997AgreementName string = purchaserReceive997AgreementName
+output purchaserInbound997WorkflowName string = purchaserInbound997WorkflowName
