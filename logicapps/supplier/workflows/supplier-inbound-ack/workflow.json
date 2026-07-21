@@ -105,12 +105,12 @@
       },
       "Record_997_Send_Failure": {
         "type": "Compose",
-        "description": "Failure handler (build-lock routing): an HTTP-triggered workflow has no Service Bus lock to settle, so a failed/timed-out 997 send is captured here for run-history visibility. Runs only when POST_997_to_purchaser fails or times out.",
+        "description": "Failure handler (build-lock routing): an HTTP-triggered workflow has no Service Bus lock to settle, so a failed/timed-out 997 send is captured here for run-history visibility. Runs only when POST_997_to_purchaser fails or times out. Uses outputs() (the HTTP response: statusCode/headers/body) NOT result(): the result() function is only valid on scope-type actions (Scope/Foreach/Until), never a plain action like this Http one, which otherwise fails template validation as InvalidTemplate and marks the whole workflow Unhealthy.",
         "runAfter": {
           "POST_997_to_purchaser": ["FAILED", "TIMEDOUT"]
         },
         "inputs": {
-          "ack997SendFailure": "@result('POST_997_to_purchaser')"
+          "ack997SendFailure": "@outputs('POST_997_to_purchaser')"
         }
       },
       "Transform_850_to_PO_Canonical": {
