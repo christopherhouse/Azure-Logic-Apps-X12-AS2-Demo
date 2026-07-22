@@ -34,17 +34,17 @@
         },
         "inputs": {
           "statusCode": 200,
-          "headers": "@body('Decode_AS2')?['outgoingMdnContent']?['outgoingMdnHeaders']",
-          "body": "@body('Decode_AS2')?['outgoingMdnContent']?['messageContent']"
+          "headers": "@body('Decode_AS2')?['outgoingMdnHeaders']",
+          "body": "@base64ToBinary(body('Decode_AS2')?['outgoingMdnContent']?['$content'])"
         }
       },
       "Decoded_850_FlatFile": {
         "type": "Compose",
-        "description": "The AS2 (v2) decoded payload is base64-encoded JSON string content. Convert it to the X12 850 flat-file string once, so it can be fed to X12 Decode and used to read the 850's group/transaction control numbers for the 997 echoes (base64ToString per MS Learn B2B 'Add the decode X12' Standard example).",
+        "description": "Extract the raw X12 850 flat-file string from the AS2 (v2) Decode output. The AS2 decode 'messageContent' is an object {$content-type,$content}; its $content is base64 of a JSON envelope {encodedMessageContent:{$content-type,$content},agreement,delimiterSet,interchangeProperties}. The X12 flat file itself is encodedMessageContent.$content (base64). So decode the outer $content to JSON, then base64ToString the inner encodedMessageContent.$content to get 'ISA*00*...~'. Verified against a live Decode_AS2 run output. Feeds X12 Decode and the 997 control-number echoes.",
         "runAfter": {
           "Respond_With_MDN": ["SUCCEEDED"]
         },
-        "inputs": "@base64ToString(body('Decode_AS2')?['messageContent'])"
+        "inputs": "@base64ToString(json(base64ToString(body('Decode_AS2')?['messageContent']?['$content']))?['encodedMessageContent']?['$content'])"
       },
       "Decode_X12_850": {
         "type": "X12Decode",
@@ -115,12 +115,12 @@
       },
       "Transform_850_to_PO_Canonical": {
         "type": "Xslt",
-        "description": "Transform the decoded 850 XML (first good transaction set) to the supplier canonical shape using the project map in Artifacts/Maps (map source LogicApp). goodMessages is a Learn-documented X12 Decode output; the per-item 'body' accessor is community-sourced and flagged for a designer/runtime round-trip.",
+        "description": "Transform the decoded 850 XML (first transaction set) to the supplier canonical shape using the project map in Artifacts/Maps (map source LogicApp). The Standard BUILT-IN X12 Decode output is interchange.functionalGroups[0].transactionSets[0].transactionSetContent ({$content-type,$content}); $content is base64 of the 850 XML (UTF-8 BOM prefixed). Use xml(base64ToBinary(...)) (the MS Learn pattern) so the BOM is handled as a byte order mark rather than a stray character. Verified against a live Decode_X12_850 run output (the managed-connector 'goodMessages' shape does NOT apply to the built-in).",
         "runAfter": {
           "Decode_X12_850": ["SUCCEEDED"]
         },
         "inputs": {
-          "content": "@first(body('Decode_X12_850')?['goodMessages'])?['body']",
+          "content": "@xml(base64ToBinary(body('Decode_X12_850')?['interchange']?['functionalGroups']?[0]?['transactionSets']?[0]?['transactionSetContent']?['$content']))",
           "map": {
             "source": "LogicApp",
             "name": "X12_850_006030_to_PO_Canonical.xslt"
