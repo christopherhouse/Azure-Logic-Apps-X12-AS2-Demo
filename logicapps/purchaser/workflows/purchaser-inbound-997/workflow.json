@@ -34,17 +34,17 @@
         },
         "inputs": {
           "statusCode": 200,
-          "headers": "@body('Decode_AS2')?['outgoingMdnContent']?['outgoingMdnHeaders']",
-          "body": "@body('Decode_AS2')?['outgoingMdnContent']?['messageContent']"
+          "headers": "@body('Decode_AS2')?['outgoingMdnHeaders']",
+          "body": "@base64ToBinary(body('Decode_AS2')?['outgoingMdnContent']?['$content'])"
         }
       },
       "Decoded_997_FlatFile": {
         "type": "Compose",
-        "description": "The AS2 (v2) decoded payload is base64-encoded content. Convert it to the X12 997 flat-file string for X12 Decode (base64ToString per MS Learn B2B 'Add the decode X12' Standard example).",
+        "description": "Extract the raw X12 997 flat-file string from the AS2 (v2) Decode output. AS2 decode 'messageContent' is an object {$content-type,$content}; its $content is base64 of a JSON envelope whose encodedMessageContent.$content is the base64 X12 flat file. Decode the outer $content to JSON, then base64ToString the inner encodedMessageContent.$content to get 'ISA*00*...~'. Same shape verified live on the supplier receive path.",
         "runAfter": {
           "Respond_With_MDN": ["SUCCEEDED"]
         },
-        "inputs": "@base64ToString(body('Decode_AS2')?['messageContent'])"
+        "inputs": "@base64ToString(json(base64ToString(body('Decode_AS2')?['messageContent']?['$content']))?['encodedMessageContent']?['$content'])"
       },
       "Decode_X12_997": {
         "type": "X12Decode",
@@ -58,17 +58,18 @@
       },
       "Record_997_Status": {
         "type": "Compose",
-        "description": "Record/log the inbound functional-acknowledgment status for run-history visibility. Inputs capture the decoded 997 good/bad message sets (goodMessages is a Learn-documented X12 Decode output); tracked properties reference only this action's own output, per the trackedProperties scoping rule.",
+        "description": "Record/log the inbound functional-acknowledgment status for run-history visibility. The Standard BUILT-IN X12 Decode output is interchange.functionalGroups[].transactionSets[] (NOT the managed-connector goodMessages/badMessages). Capture the interchange control number, the failed flag, and the functional groups. trackedProperties reference ONLY this action's own output, per the scoping rule.",
         "runAfter": {
           "Decode_X12_997": ["SUCCEEDED"]
         },
         "inputs": {
-          "functionalAck": "@body('Decode_X12_997')?['goodMessages']",
-          "rejected": "@body('Decode_X12_997')?['badMessages']"
+          "interchangeControlNumber": "@body('Decode_X12_997')?['interchange']?['interchangeControlNumber']",
+          "isFailedInterchange": "@body('Decode_X12_997')?['interchange']?['isFailedInterchange']",
+          "functionalGroups": "@body('Decode_X12_997')?['interchange']?['functionalGroups']"
         },
         "trackedProperties": {
-          "functionalAckReceived": "@not(empty(outputs('Record_997_Status')?['functionalAck']))",
-          "functionalAckRejected": "@not(empty(outputs('Record_997_Status')?['rejected']))"
+          "ack997Received": "@not(empty(outputs('Record_997_Status')?['functionalGroups']))",
+          "ack997InterchangeFailed": "@outputs('Record_997_Status')?['isFailedInterchange']"
         }
       }
     },
